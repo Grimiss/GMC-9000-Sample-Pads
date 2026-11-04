@@ -1019,3 +1019,52 @@ body {
 .mode-controls #overdub {
   font-size: 19px;
 }
+.io-settings {
+  position: static;
+  border-top: 1px solid #8c7454;
+  padding-top: 10px;
+  margin-top: 20px;
+}
+.io-settings h3 {
+  margin: 15px 0 8px;
+}
+.io-settings label {
+  margin: 12px 0;
+  display: flex;
+  flex-wrap: wrap;
+}
+.io-settings button {
+  font-size: 17px;
+  padding: 8px 12px;
+  margin: 4px 6px 4px 0;
+}
+.io-settings select {
+  font: inherit;
+  max-width: 100%;
+  flex: 1;
+  background: #f5e5c7;
+  color: #201e17;
+  padding: 6px;
+  border: 1px solid #807051;
+}
+.io-settings p {
+  font-size: 17px;
+}
+#menu-dialog {
+  max-height: 88vh;
+  overflow-y: auto;
+  width: 650px;
+}
+#rec.recording {
+  box-shadow:
+    0 0 16px 5px #ff310a,
+    inset 0 0 8px #ffb666;
+}
+#rec.recording:after {
+  content: "●";
+  color: #ffcf9d;
+  font-size: 22px;
+}
+#rec:disabled {
+  cursor: wait;
+}

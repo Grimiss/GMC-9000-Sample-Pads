@@ -19,7 +19,7 @@ The available Codex tools advertise remote desktop capability but do not expose 
 
 Assume a public Pages site: anyone can access and copy the interface, JavaScript, worklet, bundled fonts and other deployed assets. A private repository does not by itself make the Pages site private. No repository visibility change is proposed. Future pushes to development will rebuild and republish this site while the workflow is enabled.
 
-Only `dist` is deployed; no WAV files or credentials are bundled. Imported WAVs are decoded locally in the visitor's browser and are not uploaded by this application. Initial pads have names but contain no sounds: the user must LOAD a WAV to hear audio. Playback starts after a user gesture over HTTPS.
+Only `dist` is deployed; no user WAV files or credentials are bundled. Imported WAVs are decoded locally in the visitor's browser and are not uploaded by this application. All nine pads now include locally synthesized demonstration samples. LOAD replaces a pad with a user WAV; audio-input recording and MIDI access require separate browser permissions. Playback starts after a user gesture over HTTPS.
 
 The user has approved public deployment. No additional deployment approval is required. The cloud environment must not be modified or republished.
 

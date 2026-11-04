@@ -1,3 +1,6 @@
+import { loadDemoSamples } from "./audio/demo";
+import { audioInput } from "./audio/input";
+import { MidiLearn } from "./midi";
 import { hardwareMarkup } from "./interface";
 import "./style.css";
 import { pads, randomCounts, settings, type PadSettings } from "./state";
@@ -14,12 +17,12 @@ let sr = 12000,
   reverbAmount = 0.2;
 const $ = <T extends HTMLElement = HTMLElement>(q: string) =>
   document.querySelector<T>(q)!;
+loadDemoSamples();
 document.querySelector("#app")!.innerHTML = hardwareMarkup();
 $("#stretch").setAttribute("disabled", "");
 $("#stretch").closest("label")!.title =
   "Pitch-preserving time stretch is not implemented";
-$("#rec").setAttribute("disabled", "");
-$("#rec").title = "Recording is planned for a later version";
+$("#rec").title = "Record connected audio input into selected pad";
 function message(s: string) {
   $("#status").textContent = s;
 }
@@ -267,6 +270,7 @@ $("#pause").onclick = () =>
   });
 $("#stop").onclick = () =>
   safely(async () => {
+    await finishRecording();
     await engine.stop();
     message("STOP · ALL CYCLES RESET");
   });
@@ -380,7 +384,9 @@ $("#save").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   message("SETTINGS EXPORTED · WAV AUDIO NOT INCLUDED");
 };
-$("#menu").onclick = () => $<HTMLDialogElement>("#menu-dialog").showModal();
+$("#menu").onclick = () => {
+  $<HTMLDialogElement>("#menu-dialog").showModal();
+};
 $("#edit").onclick = () => message("EDIT · F2 REVERSE / START / END / SPEED");
 $("#left").onclick = () => select(selected - 1);
 $("#right").onclick = () => select(selected + 1);
@@ -399,13 +405,20 @@ $("#data-wheel").onwheel = (e) => {
 };
 window.addEventListener("keydown", (e) => {
   if (
-    (e.target as HTMLElement).matches("input,button") ||
+    e.repeat ||
+    e.ctrlKey ||
+    e.altKey ||
+    e.metaKey ||
+    (e.target as HTMLElement).matches(
+      "input,select,textarea,[contenteditable=true]",
+    ) ||
     $<HTMLDialogElement>("#menu-dialog").open
   )
     return;
-  if (/^[1-9]$/.test(e.key)) {
+  const digit = /^Numpad[1-9]$/.test(e.code) ? e.code.slice(-1) : e.key;
+  if (/^[1-9]$/.test(digit)) {
     e.preventDefault();
-    select(Number(e.key) - 1);
+    select(Number(digit) - 1);
     safely(async () => {
       await ready();
       await engine.trigger(selected, e.shiftKey);
@@ -479,3 +492,186 @@ export const transport = {
     return engine.trigger(pad, true);
   },
 };
+
+// Hardware I/O is opt-in; no microphone or MIDI permissions on page load.
+let recordPad = 0,
+  recordBusy = false;
+function ioMessage(text: string) {
+  $("#io-status").textContent = text;
+  message(text);
+}
+async function refreshDevices() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  for (const [id, kind] of [
+    ["audio-input", "audioinput"],
+    ["audio-output", "audiooutput"],
+  ] as const) {
+    const select = $<HTMLSelectElement>("#" + id),
+      value = select.value;
+    select.replaceChildren(new Option("System default", ""));
+    devices
+      .filter((d) => d.kind === kind)
+      .forEach((d, i) =>
+        select.add(new Option(d.label || `${kind} ${i + 1}`, d.deviceId)),
+      );
+    select.value = Array.from(select.options).some((o) => o.value === value)
+      ? value
+      : "";
+  }
+  const output = engine.context as AudioContext & {
+    setSinkId?: (id: string) => Promise<void>;
+  };
+  $<HTMLSelectElement>("#audio-output").disabled = !output.setSinkId;
+  $("#output-support").textContent = output.setSinkId
+    ? "Choose the output interface above. No input monitoring unless enabled."
+    : "Output selection unavailable: choose your audio interface in Windows Settings → System → Sound.";
+}
+$("#devices").onclick = () =>
+  safely(async () => {
+    await ready();
+    if (!navigator.mediaDevices?.getUserMedia)
+      throw new Error("Audio input requires HTTPS and a supported browser");
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    await refreshDevices();
+  });
+$("#input-connect").onclick = () =>
+  safely(async () => {
+    await ready();
+    await audioInput.connect($<HTMLSelectElement>("#audio-input").value);
+    $<HTMLInputElement>("#monitor").checked = false;
+    await refreshDevices();
+    ioMessage("INPUT CONNECTED · MONITOR OFF · REC TO CAPTURE");
+  });
+$("#input-disconnect").onclick = () =>
+  safely(() => {
+    audioInput.disconnect();
+    $<HTMLInputElement>("#monitor").checked = false;
+    ioMessage("INPUT DISCONNECTED");
+  });
+$("#monitor").onchange = () => {
+  const box = $<HTMLInputElement>("#monitor");
+  if (!audioInput.stream) {
+    box.checked = false;
+    ioMessage("Connect an input first");
+    return;
+  }
+  audioInput.monitoring(box.checked);
+};
+$("#audio-output").onchange = () =>
+  safely(async () => {
+    await ready();
+    const c = engine.context as AudioContext & {
+      setSinkId?: (id: string) => Promise<void>;
+    };
+    if (!c.setSinkId)
+      throw new Error("Choose your output in Windows sound settings");
+    await c.setSinkId($<HTMLSelectElement>("#audio-output").value);
+    ioMessage("AUDIO OUTPUT SELECTED");
+  });
+async function finishRecording() {
+  if (!audioInput.recording || recordBusy) return;
+  recordBusy = true;
+  try {
+    const buffer = await audioInput.stop();
+    if (buffer) {
+      engine.cancel(recordPad);
+      Object.assign(pads[recordPad], {
+        buffer,
+        name: `Recording ${recordPad + 1}`,
+        start: 0,
+        end: 1,
+        armed: false,
+      });
+      render();
+      ioMessage(
+        `RECORDED ${buffer.duration.toFixed(2)} SEC TO PAD ${recordPad + 1}`,
+      );
+    } else ioMessage("No input audio captured");
+  } finally {
+    recordBusy = false;
+    $("#rec").classList.remove("recording");
+  }
+}
+$("#rec").onclick = () =>
+  safely(async () => {
+    if (recordBusy) return;
+    if (audioInput.recording) {
+      await finishRecording();
+      return;
+    }
+    recordBusy = true;
+    try {
+      await ready();
+      await engine.stop();
+      recordPad = selected;
+      await audioInput.start();
+      $("#rec").classList.add("recording");
+      ioMessage(
+        `RECORDING INPUT TO PAD ${recordPad + 1} · REC / STOP TO FINISH`,
+      );
+    } finally {
+      recordBusy = false;
+    }
+  });
+const midi = new MidiLearn(
+  (target, value, trigger) => {
+    safely(async () => {
+      if (target.startsWith("pad:")) {
+        if (!trigger) return;
+        const id = Number(target.split(":")[1]);
+        if (!Number.isInteger(id) || id < 0 || id > 8) return;
+        select(id);
+        await ready();
+        await engine.trigger(id, true);
+        return;
+      }
+      if (target === "level") {
+        engine.level(selected, value);
+        render();
+        return;
+      }
+      const id = target === "master" ? "master" : target;
+      const input = document.getElementById(id) as HTMLInputElement | null;
+      if (!input || (input.type !== "range" && input.type !== "number")) return;
+      const min = Number(input.min),
+        max = Number(input.max),
+        step = Number(input.step) || 1;
+      input.value = String(
+        min + Math.round((value * (max - min)) / step) * step,
+      );
+      input.dispatchEvent(
+        new Event(input.type === "number" ? "change" : "input", {
+          bubbles: true,
+        }),
+      );
+    });
+  },
+  (text) => {
+    $("#midi-status").textContent = text;
+  },
+);
+$("#midi-connect").onclick = () =>
+  safely(async () => {
+    await ready();
+    await midi.connect();
+  });
+$("#midi-learn").onclick = () => {
+  if (!midi.access) {
+    $("#midi-status").textContent = "Connect MIDI first";
+    return;
+  }
+  midi.learning = $<HTMLSelectElement>("#midi-target").value;
+  $("#midi-status").textContent =
+    `Learning ${midi.learning}: press a note or move a CC controller`;
+};
+$("#midi-clear").onclick = () => midi.clear();
+$<HTMLSelectElement>("#midi-target").onchange = () => {
+  midi.learning = null;
+};
+$("#menu-dialog").addEventListener("close", () => {
+  midi.learning = null;
+});
+window.addEventListener("pagehide", () => {
+  audioInput.stream?.getTracks().forEach((t) => t.stop());
+});

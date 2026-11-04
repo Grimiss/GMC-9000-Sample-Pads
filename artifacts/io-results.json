@@ -1,0 +1,27 @@
+{
+  "passed": [
+    "All nine synthesized test samples contain audio",
+    "Numpad 1 triggers pad 1",
+    "Numpad 2 triggers pad 2",
+    "Numpad 3 triggers pad 3",
+    "Numpad 4 triggers pad 4",
+    "Numpad 5 triggers pad 5",
+    "Numpad 6 triggers pad 6",
+    "Numpad 7 triggers pad 7",
+    "Numpad 8 triggers pad 8",
+    "Numpad 9 triggers pad 9",
+    "Input monitoring starts off",
+    "Browser audio output selection succeeds",
+    "AudioWorklet records real input PCM into selected pad",
+    "Recorded audio plays through sampler output",
+    "MIDI note learns pad mapping",
+    "Learned MIDI note triggers independent audio voice",
+    "Learned MIDI CC changes actual master gain",
+    "MIDI mappings persist in browser",
+    "No runtime errors"
+  ],
+  "errors": [],
+  "limitations": [
+    "Physical Windows audio interface and physical MIDI hardware not available; capture uses Chromium fake WAV input and MIDI messages are simulated."
+  ]
+}
