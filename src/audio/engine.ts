@@ -29,7 +29,9 @@ export class Sampler {
       return;
     }
     this.context = new AudioContext();
-    await this.context.audioWorklet.addModule("/crusher.js");
+    await this.context.audioWorklet.addModule(
+      `${import.meta.env.BASE_URL}crusher.js`,
+    );
     const c = this.context;
     this.master = c.createGain();
     this.master.gain.value = 0.7;
