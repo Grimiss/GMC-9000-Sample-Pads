@@ -1,0 +1,36 @@
+import { pads } from "./state";
+export function hardwareMarkup() {
+  const button = (label: string, id: string, extra = "") =>
+    `<button id="${id}" ${extra}>${label}</button>`;
+  const knob = (
+    label: string,
+    id: string,
+    min: number,
+    max: number,
+    value: number,
+    step: number,
+  ) =>
+    `<label class="rotary">${label}<span class="knob" style="--angle:0deg"><i></i><input aria-label="${label}" id="${id}" type="range" min="${min}" max="${max}" value="${value}" step="${step}"></span><output id="${id}-value"></output></label>`;
+  return `<div class="viewport"><main class="machine" aria-label="GRIMISS GMC-9000 digital loop sampler">
+<section class="lcd-case"><div class="lcd"><div class="lcd-title">DIGITAL LOOP SAMPLER</div><div class="lcd-inner"><div class="lcd-name">PAD <span id="lcd-number">01</span>: <span id="lcd-name">Forest Ambience</span> ${button("LOOP", "loop")}</div><div class="wave-area"><span id="wave-arrow">▶</span><canvas id="waveform" width="780" height="66"></canvas></div><div class="lcd-counts"><label>PLAY: <input id="play-count" aria-label="PLAY repetitions" type="number" min="1" max="99" value="8"></label><label>REST: <input id="rest-count" aria-label="REST intervals" type="number" min="0" max="99" value="12"></label>${button("RND", "lcd-rnd")}</div></div><div class="lcd-tabs">TRIM <b>│</b> REV <b>│</b> SPD <b>│</b> T-STR <b>│</b> DEG <b>│</b> FX</div><div id="status" role="status">LOAD A WAV · SELECT A PAD</div></div><div class="function-keys">${["F1", "F2", "F3", "F4", "F5", "F6"].map((x, i) => button(x, "f" + i)).join("")}</div></section>
+<header class="brand"><div>GRIMISS</div><strong>GMC-<em>9000</em></strong><span>DIGITAL LOOP SAMPLER</span></header><div class="vents">${"<i></i>".repeat(5)}</div>
+<section class="utility">${["LOAD", "SAVE", "COPY", "PASTE", "UNDO", "REDO"].map((x) => `<label>${x}${button(x === "PASTE" ? "·" : "", x.toLowerCase(), `aria-label="${x}"`)}</label>`).join("")}</section>
+<section class="mode-controls">${button("EDIT", "edit", 'class="lit amber"')}${button("OVERDUB", "overdub", 'disabled title="Overdub is planned for a later version"')}${button("CLEAR", "clear")}${button("MENU", "menu")}</section>
+<section class="data-section"><b>DATA</b><button id="data-wheel" class="data-wheel" aria-label="Data wheel: next pad. Scroll to change selected parameter"><span><i></i></span></button></section>
+<section class="cursor"><b>CURSOR</b>${button("▲", "up")}${button("◀", "left")}${button("▶", "right")}${button("▼", "down")}<i></i></section>
+<section class="volume"><b>MASTER<br>VOLUME</b><div class="fader-track"><input type="range" id="master" aria-label="Master volume" min="0" max="1" step=".01" value=".7"></div></section>
+<fieldset class="sample-edit"><legend>SAMPLE EDIT</legend>${knob("START", "start", 0, 0.99, 0, 0.001)}${knob("END", "end", 0.01, 1, 1, 0.001)}${knob("SPEED", "speed", 0.25, 2, 1, 0.01)}${knob("T-STR", "stretch", 0, 1, 0.5, 0.01)}</fieldset>
+<section class="degradation"><b>DIGITAL DEGRADATION</b><div class="degrade-controls">${button("80s", "era80", 'class="lit amber"')}${button("90s", "era90")}${button("00s", "era00")}<span class="divider"></span>${knob("SR", "sr", 1000, 44100, 12000, 100)}${knob("BITS", "bits", 4, 16, 10, 1)}</div></section>
+<fieldset class="effects"><legend>FX (GLOBAL)</legend><div>${button("ON", "delay-on")}<span class="fx-label">DELAY</span>${knob("", "delay", 0, 0.8, 0.25, 0.01)}</div><div>${button("ON", "reverb-on")}<span class="fx-label">REVERB</span>${knob("", "reverb", 0, 0.8, 0.2, 0.01)}</div></fieldset>
+<section class="transport">${[
+    ["REC", "rec", "●"],
+    ["STOP", "stop", "■"],
+    ["PLAY", "play", "▶"],
+    ["PAUSE", "pause", "Ⅱ"],
+  ]
+    .map(([label, id, icon]) => `<label>${label}${button(icon, id)}</label>`)
+    .join("")}</section>
+<section class="pad-bed">${[6, 7, 8, 3, 4, 5, 0, 1, 2].map((id) => `<div class="pad ${id === 0 ? "selected" : ""}" data-pad="${id}"><button class="pad-hit" data-trigger="${id}" aria-label="Pad ${id + 1}: ${pads[id].name}"><span class="pad-heading"><strong>${String(id + 1).padStart(2, "0")}</strong><span class="sample-name">${pads[id].name}</span></span><span class="pad-state">NO SAMPLE</span></button><div class="pad-counts"><button data-count="play" data-id="${id}" title="Set PLAY repetitions">P:<span>${String(pads[id].play).padStart(2, "0")}</span></button><button data-count="rest" data-id="${id}" title="Set REST intervals">R:<span>${String(pads[id].rest).padStart(2, "0")}</span></button><button data-rnd="${id}" aria-label="Randomize pad ${id + 1}">RND</button></div></div>`).join("")}</section>
+<dialog id="menu-dialog"><form method="dialog"><h2>GMC-9000 · PAD SETTINGS</h2><p>Load a WAV into the selected pad. Click a pad to start or stop its independent PLAY / REST cycle. Shift-click fires a separate one-shot.</p><label>PAD LEVEL <input id="pad-level" type="range" min="0" max="1" step=".01" value=".75"></label><p>Keys 1–9: trigger pads · Space: play / pause<br>RND changes counts only. SAVE exports settings, not sample audio.</p><p>REC, overdub and pitch-preserving time stretch are reserved for a future version.</p><button>BACK TO SAMPLER</button></form></dialog>
+<input hidden id="file" type="file" accept=".wav,audio/wav,audio/x-wav" multiple></main></div><footer>GRIMISS INSTRUMENTS <span>GMC-9000 / DIGITAL LOOP SAMPLER</span><span id="engine-state">AUDIO STANDBY</span></footer>`;
+}

@@ -1,0 +1,481 @@
+import { hardwareMarkup } from "./interface";
+import "./style.css";
+import { pads, randomCounts, settings, type PadSettings } from "./state";
+import { engine } from "./audio/engine";
+let selected = 0,
+  clipboard: PadSettings | null = null;
+let history: PadSettings[][] = [],
+  future: PadSettings[][] = [];
+let sr = 12000,
+  bits = 10,
+  delayOn = false,
+  reverbOn = false,
+  delayAmount = 0.25,
+  reverbAmount = 0.2;
+const $ = <T extends HTMLElement = HTMLElement>(q: string) =>
+  document.querySelector<T>(q)!;
+document.querySelector("#app")!.innerHTML = hardwareMarkup();
+$("#stretch").setAttribute("disabled", "");
+$("#stretch").closest("label")!.title =
+  "Pitch-preserving time stretch is not implemented";
+$("#rec").setAttribute("disabled", "");
+$("#rec").title = "Recording is planned for a later version";
+function message(s: string) {
+  $("#status").textContent = s;
+}
+function checkpoint() {
+  history.push(pads.map(settings));
+  if (history.length > 40) history.shift();
+  future = [];
+}
+function apply(snapshot: PadSettings[]) {
+  snapshot.forEach((s, i) => {
+    Object.assign(pads[i], s);
+    engine.changed(i);
+  });
+  render();
+}
+function select(id: number) {
+  selected = (id + 9) % 9;
+  render();
+}
+function render() {
+  const p = pads[selected];
+  $("#lcd-number").textContent = String(selected + 1).padStart(2, "0");
+  $("#lcd-name").textContent = p.name;
+  $("#loop").textContent = p.loop ? "LOOP" : "SHOT";
+  $<HTMLInputElement>("#play-count").value = String(p.play);
+  $<HTMLInputElement>("#rest-count").value = String(p.rest);
+  for (const key of ["start", "end", "speed"] as const) {
+    $<HTMLInputElement>("#" + key).value = String(p[key]);
+    updateKnob(key);
+  }
+  $<HTMLInputElement>("#pad-level").value = String(p.level);
+  document.querySelectorAll<HTMLElement>(".pad").forEach((el) => {
+    const id = Number(el.dataset.pad),
+      pad = pads[id];
+    el.classList.toggle("selected", id === selected);
+    el.querySelector(".sample-name")!.textContent = pad.name;
+    el.querySelector('[data-count="play"] span')!.textContent = String(
+      pad.play,
+    ).padStart(2, "0");
+    el.querySelector('[data-count="rest"] span')!.textContent = String(
+      pad.rest,
+    ).padStart(2, "0");
+  });
+  $("#f1").classList.toggle("active", p.reverse);
+  $("#undo").toggleAttribute("disabled", !history.length);
+  $("#redo").toggleAttribute("disabled", !future.length);
+  drawWave();
+}
+function updateKnob(id: string) {
+  const input = $<HTMLInputElement>("#" + id);
+  const angle =
+    ((Number(input.value) - Number(input.min)) /
+      (Number(input.max) - Number(input.min))) *
+      270 -
+    135;
+  input.parentElement!.style.setProperty("--angle", `${angle}deg`);
+  const out = $("#" + id + "-value");
+  out.textContent =
+    id === "sr"
+      ? `${(Number(input.value) / 1000).toFixed(1)}k`
+      : id === "bits"
+        ? input.value
+        : id === "speed"
+          ? `${Number(input.value).toFixed(2)}×`
+          : id === "start" || id === "end"
+            ? `${Math.round(Number(input.value) * 100)}%`
+            : "";
+}
+function drawWave() {
+  const canvas = $<HTMLCanvasElement>("#waveform"),
+    ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, 780, 66);
+  const p = pads[selected];
+  ctx.fillStyle = "#69efb5";
+  if (!p.buffer) {
+    ctx.font = "20px monospace";
+    ctx.fillText("LOAD WAV → READY TO SAMPLE", 45, 41);
+    return;
+  }
+  const data = p.buffer.getChannelData(0);
+  ctx.fillStyle = "#123c29";
+  ctx.fillRect(0, 0, 780 * p.start, 66);
+  ctx.fillRect(780 * p.end, 0, 780 * (1 - p.end), 66);
+  ctx.strokeStyle = "#79efba";
+  ctx.beginPath();
+  for (let x = 0; x < 780; x++) {
+    let peak = 0;
+    const from = Math.floor((x * data.length) / 780),
+      to = Math.floor(((x + 1) * data.length) / 780);
+    for (let i = from; i < to; i += Math.max(1, Math.floor((to - from) / 80)))
+      peak = Math.max(peak, Math.abs(data[i]));
+    ctx.moveTo(x, 33 - peak * 30);
+    ctx.lineTo(x, 33 + peak * 30);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#efffb9";
+  ctx.fillRect(780 * p.start, 0, 2, 66);
+  ctx.fillRect(780 * p.end - 2, 0, 2, 66);
+  const phase = engine.phase(selected);
+  if (phase?.audible) {
+    ctx.fillStyle = "#fff6cb";
+    ctx.fillRect(
+      (p.start + phase.position * (p.end - p.start)) * 780,
+      0,
+      2,
+      66,
+    );
+  }
+}
+async function safely(fn: () => void | Promise<void>) {
+  try {
+    await fn();
+  } catch (e) {
+    message(e instanceof Error ? e.message : String(e));
+    console.error(e);
+  }
+}
+async function ready() {
+  await engine.init();
+  engine.degrade(sr, bits);
+  engine.volume(Number($<HTMLInputElement>("#master").value));
+  engine.effects("delay", delayOn, delayAmount);
+  engine.effects("reverb", reverbOn, reverbAmount);
+}
+$("#load").onclick = () => $<HTMLInputElement>("#file").click();
+$("#file").onchange = () =>
+  safely(async () => {
+    const input = $<HTMLInputElement>("#file");
+    const files = Array.from(input.files ?? []);
+    for (let i = 0; i < Math.min(files.length, 9); i++) {
+      const id = (selected + i) % 9;
+      if (!/\.wav$/i.test(files[i].name))
+        throw new Error("Please choose a WAV file");
+      await engine.import(files[i], id);
+    }
+    await ready();
+    render();
+    message(`${files.length} WAV LOADED · CLICK PAD TO PLAY`);
+    input.value = "";
+  });
+document.querySelectorAll<HTMLElement>("[data-trigger]").forEach(
+  (el) =>
+    (el.onclick = (e) =>
+      safely(async () => {
+        select(Number(el.dataset.trigger));
+        await ready();
+        await engine.trigger(selected, (e as MouseEvent).shiftKey);
+        message(
+          pads[selected].buffer
+            ? "PAD " +
+                String(selected + 1).padStart(2, "0") +
+                " · " +
+                (pads[selected].armed ? "CYCLE ARMED" : "ONE SHOT / DISARMED")
+            : "PRESS LOAD TO IMPORT A WAV",
+        );
+      })),
+);
+function randomize(id: number) {
+  checkpoint();
+  Object.assign(pads[id], randomCounts());
+  engine.changed(id);
+  render();
+  message("RND · COUNTS SET UNTIL CHANGED");
+}
+document
+  .querySelectorAll<HTMLElement>("[data-rnd]")
+  .forEach((el) => (el.onclick = () => randomize(Number(el.dataset.rnd))));
+$("#lcd-rnd").onclick = () => randomize(selected);
+document.querySelectorAll<HTMLElement>("[data-count]").forEach(
+  (el) =>
+    (el.onclick = () => {
+      select(Number(el.dataset.id));
+      const key = el.dataset.count === "play" ? "play-count" : "rest-count";
+      $<HTMLInputElement>("#" + key).focus();
+      $<HTMLInputElement>("#" + key).select();
+    }),
+);
+for (const key of ["play", "rest"] as const) {
+  $("#" + key + "-count").onchange = () => {
+    const value = Number($<HTMLInputElement>("#" + key + "-count").value);
+    if (!Number.isFinite(value)) {
+      render();
+      return;
+    }
+    checkpoint();
+    pads[selected][key] = Math.max(
+      key === "play" ? 1 : 0,
+      Math.min(99, Math.round(value)),
+    );
+    engine.changed(selected);
+    render();
+  };
+}
+$("#loop").onclick = () => {
+  checkpoint();
+  pads[selected].loop = !pads[selected].loop;
+  if (!pads[selected].loop) {
+    engine.cancel(selected);
+    pads[selected].armed = false;
+  } else engine.changed(selected);
+  render();
+};
+for (const key of ["start", "end", "speed"] as const) {
+  $("#" + key).onpointerdown = () => checkpoint();
+  $("#" + key).oninput = () => {
+    const p = pads[selected],
+      v = Number($<HTMLInputElement>("#" + key).value);
+    p[key] =
+      key === "start"
+        ? Math.min(p.end - 0.001, v)
+        : key === "end"
+          ? Math.max(p.start + 0.001, v)
+          : v;
+    engine.changed(selected);
+    render();
+  };
+}
+$("#f0").onclick = () => {
+  message("TRIM · START / END SET THE AUDIBLE REGION");
+  $<HTMLInputElement>("#start").focus();
+};
+$("#f1").onclick = () => {
+  checkpoint();
+  pads[selected].reverse = !pads[selected].reverse;
+  engine.changed(selected);
+  render();
+  message(pads[selected].reverse ? "REVERSE ON" : "REVERSE OFF");
+};
+$("#f2").onclick = () => $<HTMLInputElement>("#speed").focus();
+$("#f3").onclick = () => message("T-STR · RESERVED / NOT IMPLEMENTED");
+$("#f4").onclick = () => $<HTMLInputElement>("#sr").focus();
+$("#f5").onclick = () => $<HTMLInputElement>("#delay").focus();
+$("#play").onclick = () =>
+  safely(async () => {
+    await ready();
+    await engine.play();
+    message(
+      pads.some((p) => p.buffer) ? "TRANSPORT · PLAY" : "LOAD A WAV TO BEGIN",
+    );
+  });
+$("#pause").onclick = () =>
+  safely(async () => {
+    if (engine.status === "paused") await engine.play();
+    else await engine.pause();
+  });
+$("#stop").onclick = () =>
+  safely(async () => {
+    await engine.stop();
+    message("STOP · ALL CYCLES RESET");
+  });
+$("#master").oninput = () =>
+  engine.volume(Number($<HTMLInputElement>("#master").value));
+$("#pad-level").oninput = () =>
+  engine.level(selected, Number($<HTMLInputElement>("#pad-level").value));
+for (const id of ["sr", "bits"])
+  $("#" + id).oninput = () => {
+    sr = Number($<HTMLInputElement>("#sr").value);
+    bits = Number($<HTMLInputElement>("#bits").value);
+    engine.degrade(sr, bits);
+    updateKnob(id);
+  };
+for (const [id, rate, depth] of [
+  ["era80", 12000, 10],
+  ["era90", 22050, 12],
+  ["era00", 44100, 16],
+] as const) {
+  $("#" + id).onclick = () => {
+    sr = rate;
+    bits = depth;
+    $<HTMLInputElement>("#sr").value = String(sr);
+    $<HTMLInputElement>("#bits").value = String(bits);
+    engine.degrade(sr, bits);
+    ["era80", "era90", "era00"].forEach((x) =>
+      $("#" + x).classList.toggle("lit", x === id),
+    );
+    updateKnob("sr");
+    updateKnob("bits");
+  };
+}
+for (const kind of ["delay", "reverb"] as const) {
+  $("#" + kind + "-on").onclick = () => {
+    if (kind === "delay") delayOn = !delayOn;
+    else reverbOn = !reverbOn;
+    const on = kind === "delay" ? delayOn : reverbOn;
+    $("#" + kind + "-on").classList.toggle("lit", on);
+    engine.effects(kind, on, kind === "delay" ? delayAmount : reverbAmount);
+  };
+  $("#" + kind).oninput = () => {
+    const value = Number($<HTMLInputElement>("#" + kind).value);
+    if (kind === "delay") delayAmount = value;
+    else reverbAmount = value;
+    updateKnob(kind);
+    engine.effects(kind, kind === "delay" ? delayOn : reverbOn, value);
+  };
+}
+$("#copy").onclick = () => {
+  clipboard = settings(pads[selected]);
+  message("PAD SETTINGS COPIED · AUDIO RETAINED ON ORIGINAL PAD");
+};
+$("#paste").onclick = () => {
+  if (!clipboard) return message("COPY PAD SETTINGS FIRST");
+  checkpoint();
+  const { id, name, ...s } = clipboard;
+  Object.assign(pads[selected], s);
+  engine.changed(selected);
+  render();
+  message("PAD SETTINGS PASTED");
+};
+$("#undo").onclick = () => {
+  const previous = history.pop();
+  if (previous) {
+    future.push(pads.map(settings));
+    apply(previous);
+  }
+};
+$("#redo").onclick = () => {
+  const next = future.pop();
+  if (next) {
+    history.push(pads.map(settings));
+    apply(next);
+  }
+};
+$("#clear").onclick = () => {
+  engine.cancel(selected);
+  Object.assign(pads[selected], {
+    buffer: null,
+    name: "Empty Pad",
+    armed: false,
+  });
+  render();
+  message("PAD AUDIO CLEARED · CANNOT UNDO AUDIO REMOVAL");
+};
+$("#save").onclick = () => {
+  const blob = new Blob(
+    [
+      JSON.stringify(
+        {
+          product: "GMC-9000",
+          pads: pads.map(settings),
+          sr,
+          bits,
+          delayOn,
+          reverbOn,
+          delayAmount,
+          reverbAmount,
+        },
+        null,
+        2,
+      ),
+    ],
+    { type: "application/json" },
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "GMC-9000-settings.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  message("SETTINGS EXPORTED · WAV AUDIO NOT INCLUDED");
+};
+$("#menu").onclick = () => $<HTMLDialogElement>("#menu-dialog").showModal();
+$("#edit").onclick = () => message("EDIT · F2 REVERSE / START / END / SPEED");
+$("#left").onclick = () => select(selected - 1);
+$("#right").onclick = () => select(selected + 1);
+$("#up").onclick = () => select(selected + 3);
+$("#down").onclick = () => select(selected - 3);
+$("#data-wheel").onclick = () => select(selected + 1);
+$("#data-wheel").onwheel = (e) => {
+  e.preventDefault();
+  checkpoint();
+  pads[selected].play = Math.max(
+    1,
+    Math.min(99, pads[selected].play + (e.deltaY < 0 ? 1 : -1)),
+  );
+  engine.changed(selected);
+  render();
+};
+window.addEventListener("keydown", (e) => {
+  if (
+    (e.target as HTMLElement).matches("input,button") ||
+    $<HTMLDialogElement>("#menu-dialog").open
+  )
+    return;
+  if (/^[1-9]$/.test(e.key)) {
+    e.preventDefault();
+    select(Number(e.key) - 1);
+    safely(async () => {
+      await ready();
+      await engine.trigger(selected, e.shiftKey);
+    });
+  }
+  if (e.code === "Space") {
+    e.preventDefault();
+    safely(async () => {
+      await ready();
+      if (engine.status === "playing") await engine.pause();
+      else await engine.play();
+    });
+  }
+});
+function fit() {
+  const scale = Math.min((innerWidth - 24) / 1536, (innerHeight - 44) / 1024);
+  $(".machine").style.transform = `scale(${Math.max(0.15, scale)})`;
+  $(".viewport").style.width = 1536 * Math.max(0.15, scale) + "px";
+  $(".viewport").style.height = 1024 * Math.max(0.15, scale) + "px";
+}
+window.onresize = fit;
+fit();
+setInterval(() => {
+  document.querySelectorAll<HTMLElement>(".pad").forEach((el) => {
+    const id = Number(el.dataset.pad),
+      p = pads[id],
+      phase = engine.phase(id);
+    el.classList.toggle(
+      "playing",
+      !!phase?.audible && p.armed && engine.status === "playing",
+    );
+    el.querySelector(".pad-state")!.textContent = !p.buffer
+      ? "NO SAMPLE"
+      : !p.armed
+        ? `${p.buffer.duration.toFixed(2)} SEC · READY`
+        : engine.status === "paused"
+          ? "PAUSED"
+          : engine.status === "stopped"
+            ? "READY"
+            : phase?.audible
+              ? "PLAYING"
+              : "REST";
+  });
+  $("#play").classList.toggle("lit", engine.status === "playing");
+  $("#pause").classList.toggle("lit", engine.status === "paused");
+  $("#engine-state").textContent = engine.context
+    ? `AUDIO ${engine.status.toUpperCase()} · ${engine.context.sampleRate / 1000} kHz`
+    : "AUDIO STANDBY";
+  drawWave();
+}, 60);
+for (const id of [
+  "start",
+  "end",
+  "speed",
+  "stretch",
+  "sr",
+  "bits",
+  "delay",
+  "reverb",
+])
+  updateKnob(id);
+render();
+// Explicit adapter surface; no DS-9 connection or synchronization is implemented.
+export const transport = {
+  play: () => engine.play(),
+  pause: () => engine.pause(),
+  stop: () => engine.stop(),
+  trigger: (pad: number) => {
+    if (!Number.isInteger(pad) || pad < 0 || pad > 8)
+      throw new RangeError("Pad must be 0–8");
+    return engine.trigger(pad, true);
+  },
+};

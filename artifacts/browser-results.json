@@ -1,0 +1,22 @@
+{
+  "passed": [
+    "Nine pads in reference order",
+    "WAV import and stereo decoding",
+    "All nine audio engines produce overlapping voices",
+    "Actual mixed audio output is nonzero",
+    "Independent PLAY / REST phases",
+    "Pause freezes audio clock",
+    "Resume advances preserved clock",
+    "Stop clears voices and resets cycles",
+    "RND counts in range and audio preserved",
+    "Worklet bit depth quantizes real PCM",
+    "Worklet sample reduction holds values",
+    "Degradation changes the signal",
+    "Effect switches set live audio gains",
+    "Delay and reverb produce actual audio tails",
+    "Trim, rate, reverse and independent trigger affect the playback engine",
+    "Canvas retains 3:2 ratio at smaller size",
+    "No browser runtime errors"
+  ],
+  "errors": []
+}
