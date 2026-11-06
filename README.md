@@ -22,7 +22,7 @@ Open the development server in a desktop browser. Web Audio needs a secure conte
 - START/END trim non-destructively. SPEED changes duration and pitch. F2 toggles reverse. The waveform shows region boundaries and playback position. MENU exposes the selected pad's independent level. The vertical fader controls master volume.
 - 80s: 12 kHz / 10-bit; 90s: 22.05 kHz / 12-bit; 00s: 44.1 kHz / 16-bit. SR and BITS directly control the sample-and-hold / quantization AudioWorklet. They affect the mixed dry signal and effect sends.
 - Delay and reverb each have ON and amount controls. Delay uses 310 ms with feedback; reverb uses a generated stereo impulse response.
-- COPY/PASTE and UNDO/REDO cover pad settings, not audio buffers. CLEAR removes the selected sample immediately and cannot undo audio removal. SAVE exports settings JSON only; session/sample restoration is not implemented.
+- COPY/PASTE and UNDO/REDO cover pad settings, not audio buffers. CLEAR removes the selected sample immediately and cannot undo audio removal. SAVE retains its settings-only export. Complete session/audio export and restore are available in MIDI EDIT.
 
 ## Validation
 
@@ -38,6 +38,9 @@ The browser test uses `/usr/bin/chromium` (adjust the executable path on other s
 ## Source layout
 
 - `src/state.ts`: pad state, settings snapshots, cycle math, random counts.
+- `src/events/core.ts`: instrument-independent clip recording, quantization, clock and scheduled event core.
+- `src/midi-editor.ts`: nine-lane UI and GMC adapter.
+- `src/project.ts`: versioned portable audio projects and IndexedDB recovery.
 - `src/audio/engine.ts`: decoding, per-pad AudioBufferSource voices, independent audio-clock scheduling, transport and non-destructive region/reverse playback.
 - `src/audio/effects.ts`: parallel delay and convolution reverb graph.
 - `public/crusher.js`: audio-thread sample-rate and bit-depth reduction.
@@ -49,7 +52,7 @@ Scheduling uses a 25 ms look-ahead pump with audio-clock timestamps, never anima
 
 ## Reserved / incomplete
 
-Overdub, pitch-preserving time stretch, destructive trim, audio-buffer undo, full session persistence and DS-9 connectivity are not implemented. OVERDUB and T-STR remain disabled or explicitly marked unavailable. Each pad starts with an original synthesized stereo test sample. LOAD replaces it with your own WAV. Windows packaging is not included; the application has no native/server dependency and can be packaged later.
+Audio overdub, pitch-preserving time stretch, destructive trim, audio-buffer undo and DS-9 connectivity are not implemented. OVERDUB and T-STR remain disabled or explicitly marked unavailable. Each pad starts with an original synthesized stereo test sample. LOAD replaces it with your own WAV. Windows packaging is not included; the application has no native/server dependency and can be packaged later.
 
 ## Audio interface recording and MIDI learn
 
@@ -57,8 +60,18 @@ Use Chrome or Edge over HTTPS for the broadest audio/MIDI support. No driver is 
 
 1. Open MENU → ENABLE AUDIO / REFRESH DEVICES and grant audio-input permission. Select the interface INPUT, then CONNECT INPUT. The browser may expose an interface as a stereo pair rather than all of its hardware channels.
 2. Select OUTPUT to send the instrument to your interface. If the browser does not offer AudioContext output selection, select the interface in Windows Settings → System → Sound instead. The app reports this fallback in MENU. Input monitoring defaults to OFF; enable it with headphones when wanted. DISCONNECT INPUT releases the microphone/interface capture stream.
-3. Close MENU, select a destination pad with the cursor controls, then press REC. Recording stops existing sampler playback and captures unprocessed input into that pad. Press REC again or STOP to finish; click the pad to play the recording through the sampler and chosen output. Selecting another pad during capture does not change the recording destination. Recordings are memory-resident and replace the destination sample when finished; reloading the page discards recordings and reloads test samples. SAVE still exports settings only.
+3. Close MENU, select a destination pad with the cursor controls, then press REC. Recording stops existing sampler playback and captures unprocessed input into that pad. Press REC again or STOP to finish; click the pad to play the recording through the sampler and chosen output. Selecting another pad during capture does not change the recording destination. Recordings are memory-resident and replace the destination sample when finished; reloading begins with test samples. Recover the local autosave or load a portable project to restore recordings. Export a project before closing for a durable backup; SAVE still exports settings only.
 4. MENU → CONNECT MIDI requests Web MIDI permission (no SysEx). Select a LEARN TARGET, press LEARN NEXT NOTE / CC, then play a note or move a controller. That message is used for learning only; subsequent messages control the target. Pad notes layer independent one-shots. CC pad triggers fire on the upward crossing of 64. MIDI note-off and note-on velocity zero do not trigger. Other learned targets adjust the selected pad's parameters or the global master/effect amounts. Effect ON switches still control whether wet effects are heard.
 5. Mappings include the MIDI input device and channel, are saved locally in this browser, and can be removed with CLEAR MAPPINGS. Reconnect MIDI each browser session; use Learn again if device identifiers change. Newly attached devices are recognized after MIDI access is granted.
 
 `npm run test:io` (with Vite running) verifies all nine demo samples, Numpad 1–9, real AudioWorklet PCM capture using a Chromium simulated WAV input, recorded playback, monitoring default, and MIDI note/CC learn using simulated MIDI messages. Results are saved in `artifacts/io-results.json`. Physical Windows interface routing, latency, monitoring and physical MIDI controllers require user testing. No permission is requested on page load, and no audio is uploaded.
+
+## MIDI performance editor and complete projects (review build)
+
+GMC-9000 remains standalone. Microseq is another standalone instrument; DM-848 is a separate host. This feature has no dependency on either and changes neither.
+
+Use the new MIDI REC / MIDI EDIT strip below the unchanged hardware panel. While MIDI REC is armed, pads, keypad and mapped MIDI notes record independent performance one-shots; existing PLAY/REST cycles continue. Outside recording, pad-click behavior is unchanged. The nine named lanes support paint, Ctrl-erase, movement, exact timing, velocity, undo/redo, overdub/replace, quantization OFF through 1/32 and independent clip lengths. SEQ/MIDI/BOTH keeps clip events separate from PLAY/REST.
+
+The editor provides portable EXPORT PROJECT + AUDIO, validated project/legacy-settings import, and explicit IndexedDB recovery. Portable projects retain actual imported/recorded audio; legacy SAVE remains settings-only. Local autosave is held when an older recovery snapshot exists until you recover it or choose KEEP CURRENT. Export projects as durable backups.
+
+See [the review guide](docs/MIDI-EDITOR-REVIEW.md) for operation, validation and limitations, and [the event interface](docs/EVENT-INTERFACE.md) for the reusable clock/voice contract. FREE uses the local clock; SYNC waits for a supplied host adapter. No gated playback, external MIDI output or SEQ-to-MIDI capture is implemented. Run `npm run test:editor` with Vite running for the editor/persistence integration checks.

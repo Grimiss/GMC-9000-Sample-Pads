@@ -19,7 +19,12 @@ export class MidiLearn {
   learning: string | null = null;
   previous = new Map<string, number>();
   constructor(
-    private apply: (target: string, value: number, trigger: boolean) => void,
+    private apply: (
+      target: string,
+      value: number,
+      trigger: boolean,
+      info?: { key: string; timestamp: number; release: boolean },
+    ) => void,
     private report: (text: string) => void,
   ) {
     try {
@@ -48,11 +53,29 @@ export class MidiLearn {
     if (!this.access) return;
     for (const input of this.access.inputs.values())
       input.onmidimessage = (e) => {
-        if (e.data) this.receive(input.id, e.data);
+        if (e.data) this.receive(input.id, e.data, e.timeStamp);
       };
     this.report(`${this.access.inputs.size} MIDI input(s) connected`);
   }
-  receive(device: string, data: Uint8Array) {
+  receive(device: string, data: Uint8Array, timestamp = performance.now()) {
+    const kind = data[0] & 240,
+      channel = data[0] & 15,
+      number = data[1];
+    if (data.length >= 3 && (kind === 128 || (kind === 144 && data[2] === 0))) {
+      for (const b of this.bindings)
+        if (
+          b.device === device &&
+          b.channel === channel &&
+          b.kind === 144 &&
+          b.number === number
+        )
+          this.apply(b.target, 0, false, {
+            key: `${device}/${channel}/144/${number}`,
+            timestamp,
+            release: true,
+          });
+      return;
+    }
     const m = midiValue(data);
     if (!m) return;
     if (this.learning) {
@@ -92,7 +115,11 @@ export class MidiLearn {
         b.number === m.number
       ) {
         const trigger = m.kind === 144 || (m.value >= 64 && old < 64);
-        this.apply(b.target, m.value / 127, trigger);
+        this.apply(b.target, m.value / 127, trigger, {
+          key,
+          timestamp,
+          release: m.kind === 176 && m.value < 64,
+        });
       }
   }
   clear() {

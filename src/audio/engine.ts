@@ -6,6 +6,9 @@ interface Voice {
   start: number;
   end: number;
   pad: number;
+  owner: string;
+  velocity: number;
+  occurrence?: string;
 }
 /** AudioContext time is the sole transport clock. The timer only fills a look-ahead queue. */
 export class Sampler {
@@ -22,12 +25,26 @@ export class Sampler {
   origins = new Map<number, number>();
   next = new Map<number, number>();
   timer = 0;
+  seqEnabled = true;
+  private initializing: Promise<void> | null = null;
   async init() {
-    if (this.context) {
-      if (this.context.state === "suspended" && this.status !== "paused")
-        await this.context.resume();
-      return;
+    if (this.initializing) await this.initializing;
+    if (!this.context) {
+      this.initializing = this.createGraph();
+      try {
+        await this.initializing;
+      } catch (e) {
+        await (this.context as AudioContext | undefined)?.close();
+        this.context = undefined as unknown as AudioContext;
+        throw e;
+      } finally {
+        this.initializing = null;
+      }
     }
+    if (this.context.state === "suspended" && this.status !== "paused")
+      await this.context.resume();
+  }
+  private async createGraph() {
     this.context = new AudioContext();
     await this.context.audioWorklet.addModule(
       `${import.meta.env.BASE_URL}crusher.js`,
@@ -54,7 +71,7 @@ export class Sampler {
     });
     if (this.status !== "stopped" && pads[id].armed) this.resetPad(id);
   }
-  async trigger(id: number, independent = false) {
+  async trigger(id: number, independent = false, velocity = 1) {
     await this.init();
     if (this.status === "paused") await this.play();
     const p = pads[id];
@@ -64,7 +81,7 @@ export class Sampler {
         this.status = "playing";
         this.epoch = this.context.currentTime;
       }
-      this.voice(id, this.context.currentTime + 0.005, 0);
+      this.voice(id, this.context.currentTime + 0.005, 0, "manual", velocity);
       return;
     }
     p.armed = this.status === "stopped" ? true : !p.armed;
@@ -76,7 +93,7 @@ export class Sampler {
       }
       this.resetPad(id);
     } else {
-      this.cancel(id);
+      this.cancelPadOwner(id, "seq");
       this.origins.delete(id);
       this.next.delete(id);
     }
@@ -118,12 +135,22 @@ export class Sampler {
     if (this.context.state === "suspended") await this.context.resume();
   }
   resetPad(id: number) {
-    this.cancel(id);
+    this.cancelPadOwner(id, "seq");
     this.origins.set(id, this.context.currentTime + 0.01);
     this.next.set(id, 0);
   }
   changed(id: number) {
     if (this.status !== "stopped" && pads[id].armed) this.resetPad(id);
+  }
+  private cancelPadOwner(id: number, owner: string) {
+    for (const v of this.voices.filter(
+      (v) => v.pad === id && v.owner === owner,
+    )) {
+      try {
+        v.source.stop();
+      } catch {}
+      this.voices = this.voices.filter((x) => x !== v);
+    }
   }
   cancel(id: number) {
     for (const v of this.voices.filter((v) => v.pad === id)) {
@@ -133,7 +160,14 @@ export class Sampler {
     }
     this.voices = this.voices.filter((v) => v.pad !== id);
   }
-  private voice(id: number, when: number, offset: number) {
+  private voice(
+    id: number,
+    when: number,
+    offset: number,
+    owner = "manual",
+    velocity = 1,
+    occurrence?: string,
+  ) {
     const p = pads[id];
     if (!p.buffer) return;
     const c = this.context;
@@ -141,7 +175,7 @@ export class Sampler {
     source.buffer = p.reverse ? this.reversed(p.buffer) : p.buffer;
     source.playbackRate.value = p.speed;
     const gain = c.createGain();
-    gain.gain.value = p.level;
+    gain.gain.value = p.level * velocity;
     source.connect(gain);
     gain.connect(this.crusher);
     const duration = (p.end - p.start) * p.buffer.duration;
@@ -157,6 +191,9 @@ export class Sampler {
       start: when,
       end: when + duration / p.speed - offset,
       pad: id,
+      owner,
+      velocity,
+      occurrence,
     };
     this.voices.push(v);
     source.onended = () => {
@@ -164,6 +201,37 @@ export class Sampler {
       gain.disconnect();
       this.voices = this.voices.filter((x) => x !== v);
     };
+  }
+  scheduledTrigger(
+    id: number,
+    when: number,
+    velocity: number,
+    owner: string,
+    occurrence?: string,
+  ) {
+    if (!this.context || !pads[id]?.buffer) return;
+    this.voice(
+      id,
+      Math.max(this.context.currentTime, when),
+      0,
+      owner,
+      Math.max(0, Math.min(1, velocity)),
+      occurrence,
+    );
+  }
+  cancelOwner(owner: string, after = -Infinity) {
+    for (const v of this.voices.filter(
+      (v) => v.owner === owner && v.start >= after,
+    )) {
+      try {
+        v.source.stop();
+      } catch {}
+      this.voices = this.voices.filter((x) => x !== v);
+    }
+  }
+  enableSequencer(on: boolean) {
+    this.seqEnabled = on;
+    if (!on) this.cancelOwner("seq");
   }
   reversedCache = new WeakMap<AudioBuffer, AudioBuffer>();
   private reversed(buffer: AudioBuffer) {
@@ -184,7 +252,7 @@ export class Sampler {
     if (this.status !== "playing") return;
     const now = this.context.currentTime;
     for (const p of pads) {
-      if (!p.buffer || !p.armed || !p.loop) continue;
+      if (!this.seqEnabled || !p.buffer || !p.armed || !p.loop) continue;
       const origin = this.origins.get(p.id);
       if (origin === undefined) continue;
       const d = regionDuration(p, p.buffer.duration);
@@ -195,7 +263,7 @@ export class Sampler {
         const t = origin + n * d;
         if (n % (p.play + p.rest) < p.play) {
           const late = Math.max(0, now - t);
-          if (late < d) this.voice(p.id, Math.max(now, t), late);
+          if (late < d) this.voice(p.id, Math.max(now, t), late, "seq");
         }
         n++;
       }
@@ -223,7 +291,11 @@ export class Sampler {
   level(id: number, v: number) {
     pads[id].level = v;
     for (const voice of this.voices.filter((x) => x.pad === id))
-      voice.gain.gain.setTargetAtTime(v, this.context.currentTime, 0.01);
+      voice.gain.gain.setTargetAtTime(
+        v * voice.velocity,
+        this.context.currentTime,
+        0.01,
+      );
   }
   effects(kind: "delay" | "reverb", on: boolean, amount: number) {
     const node = kind === "delay" ? this.delayWet : this.reverbWet;

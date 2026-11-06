@@ -146,6 +146,36 @@ try {
       );
     }),
   );
+  check(
+    "Portable projects retain recorded input audio",
+    await page.evaluate(async () => {
+      const resource = (p) =>
+        performance
+          .getEntriesByType("resource")
+          .find((r) => new URL(r.name).pathname === p).name;
+      const project = await import(resource("/src/project.ts"));
+      const { midiSession } = await import(resource("/src/main.ts"));
+      const saved = await project.captureProject(midiSession.store.state, {
+        sr: 12000,
+        bits: 10,
+        master: 0.7,
+        delayOn: false,
+        reverbOn: false,
+        delayAmount: 0.25,
+        reverbAmount: 0.2,
+      });
+      const restored = await project.stageProject(
+        saved,
+        window.testEngine.context,
+      );
+      const b = restored.pads[8].buffer;
+      return (
+        restored.pads[8].name === "Recording 9" &&
+        b.duration > 0.2 &&
+        b.getChannelData(0).some((x) => Math.abs(x) > 0.01)
+      );
+    }),
+  );
   await page.click('[data-trigger="8"]');
   await page.waitForTimeout(60);
   check(

@@ -9,7 +9,8 @@
     "test": "node --experimental-strip-types --test --test-isolation=none tests/*.test.ts",
     "preview": "vite preview --host 0.0.0.0",
     "test:browser": "node tests/browser.mjs",
-    "test:io": "node tests/io-browser.mjs"
+    "test:io": "node tests/io-browser.mjs",
+    "test:editor": "node tests/editor-browser.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1",

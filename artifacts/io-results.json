@@ -13,6 +13,7 @@
     "Input monitoring starts off",
     "Browser audio output selection succeeds",
     "AudioWorklet records real input PCM into selected pad",
+    "Portable projects retain recorded input audio",
     "Recorded audio plays through sampler output",
     "MIDI note learns pad mapping",
     "Learned MIDI note triggers independent audio voice",

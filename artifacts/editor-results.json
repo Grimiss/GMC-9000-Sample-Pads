@@ -1,0 +1,27 @@
+{
+  "passed": [
+    "MIDI REC has visible armed state",
+    "Live pad recording layers without resetting PLAY/REST",
+    "Key releases record note duration",
+    "Mapped MIDI captures velocity and note-off without changing pad level",
+    "Dragging paints all traversed cells without duplicates",
+    "Ctrl-drag erases triggers",
+    "One undo restores whole erased gesture",
+    "Redo restores erase",
+    "Triggers move across time and pad lanes",
+    "Precise timing and velocity inspector works",
+    "SYNC without host visibly waits and produces no MIDI voices",
+    "BOTH retains coincident SEQ and MIDI voices with independent gains",
+    "Pause retains active MIDI sample tail for resume",
+    "Resume retains the same MIDI tail",
+    "Disarming a pad cycle does not cancel independent MIDI voices",
+    "Portable export includes actual deduplicated hashed WAV audio",
+    "Project load restores audio, assignments, edits, PLAY/REST and exact clip timing",
+    "Corrupt asset rejected atomically without changing current audio",
+    "Unknown future project version is rejected",
+    "Legacy settings import retains sample audio and MIDI mappings",
+    "IndexedDB recovery restores sample audio after reload",
+    "No browser runtime errors"
+  ],
+  "errors": []
+}

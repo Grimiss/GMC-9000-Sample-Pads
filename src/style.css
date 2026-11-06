@@ -1068,3 +1068,104 @@ body {
 #rec:disabled {
   cursor: wait;
 }
+.midi-controls {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px;
+  color: #dfd1ac;
+  font-size: 15px;
+}
+.midi-controls button {
+  padding: 8px 18px;
+}
+.midi-controls label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.midi-controls select {
+  font: inherit;
+  background: #ead9b9;
+  padding: 6px;
+}
+.midi-controls span {
+  font-family: monospace;
+  font-size: 12px;
+  min-width: 230px;
+}
+.midi-controls button.armed,
+#editor-rec.armed {
+  color: #fff1dc;
+  background: #b92d16;
+  box-shadow: 0 0 12px #e94c1d;
+}
+#midi-editor {
+  width: min(1300px, 96vw);
+  max-width: 96vw;
+  max-height: 94vh;
+  overflow: auto;
+  background: #dfc7a4;
+  color: #25271e;
+  font-size: 17px;
+}
+#midi-editor h2 {
+  margin: 0 0 14px;
+}
+#midi-editor p {
+  font-size: 15px;
+  line-height: 1.4;
+}
+.editor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-items: center;
+  padding: 10px 0;
+}
+.editor-controls label {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: bold;
+}
+.editor-controls button {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.editor-controls input,
+.editor-controls select {
+  font: inherit;
+  background: #f3e6ce;
+  color: #211f16;
+  border: 1px solid #77674c;
+  padding: 5px;
+}
+.editor-controls input[type="number"] {
+  width: 110px;
+}
+.editor-controls input[type="range"] {
+  width: 140px;
+}
+.lane-scroll {
+  overflow: auto;
+}
+.lane-scroll canvas {
+  display: block;
+  width: 1200px;
+  height: 590px;
+  touch-action: none;
+  border: 3px solid #303b2a;
+}
+.editor-controls #event-select {
+  max-width: 240px;
+}
+#project-status {
+  border-top: 1px solid #867358;
+  padding-top: 10px;
+}

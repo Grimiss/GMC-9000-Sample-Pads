@@ -1,3 +1,5 @@
+import { MidiEditor } from "./midi-editor";
+let midiEditor: MidiEditor | undefined;
 import { loadDemoSamples } from "./audio/demo";
 import { audioInput } from "./audio/input";
 import { MidiLearn } from "./midi";
@@ -43,6 +45,8 @@ function select(id: number) {
   render();
 }
 function render() {
+  midiEditor?.refresh();
+  midiEditor?.changed();
   const p = pads[selected];
   $("#lcd-number").textContent = String(selected + 1).padStart(2, "0");
   $("#lcd-name").textContent = p.name;
@@ -169,6 +173,13 @@ document.querySelectorAll<HTMLElement>("[data-trigger]").forEach(
       safely(async () => {
         select(Number(el.dataset.trigger));
         await ready();
+        if (midiEditor?.timeline.armed) {
+          if ((e as MouseEvent).detail === 0) {
+            await midiEditor.perform(selected, 1, `click:${selected}`);
+            midiEditor.release(`click:${selected}`);
+          }
+          return;
+        }
         await engine.trigger(selected, (e as MouseEvent).shiftKey);
         message(
           pads[selected].buffer
@@ -180,6 +191,28 @@ document.querySelectorAll<HTMLElement>("[data-trigger]").forEach(
         );
       })),
 );
+document.querySelectorAll<HTMLElement>("[data-trigger]").forEach((el) => {
+  el.onpointerdown = (e) => {
+    if (!midiEditor?.timeline.armed || e.button !== 0) return;
+    const id = Number(el.dataset.trigger);
+    select(id);
+    el.setPointerCapture(e.pointerId);
+    safely(() =>
+      midiEditor!.perform(
+        id,
+        1,
+        `pointer:${e.pointerId}`,
+        midiEditor!.audioTime(e.timeStamp),
+      ),
+    );
+  };
+  el.onpointerup = (e) =>
+    midiEditor?.release(
+      `pointer:${e.pointerId}`,
+      midiEditor.audioTime(e.timeStamp),
+    );
+  el.onpointercancel = (e) => midiEditor?.release(`pointer:${e.pointerId}`);
+});
 function randomize(id: number) {
   checkpoint();
   Object.assign(pads[id], randomCounts());
@@ -258,20 +291,20 @@ $("#f5").onclick = () => $<HTMLInputElement>("#delay").focus();
 $("#play").onclick = () =>
   safely(async () => {
     await ready();
-    await engine.play();
+    await midiEditor!.play();
     message(
       pads.some((p) => p.buffer) ? "TRANSPORT · PLAY" : "LOAD A WAV TO BEGIN",
     );
   });
 $("#pause").onclick = () =>
   safely(async () => {
-    if (engine.status === "paused") await engine.play();
-    else await engine.pause();
+    if (engine.status === "paused") await midiEditor!.play();
+    else await midiEditor!.pause();
   });
 $("#stop").onclick = () =>
   safely(async () => {
     await finishRecording();
-    await engine.stop();
+    await midiEditor!.stop();
     message("STOP · ALL CYCLES RESET");
   });
 $("#master").oninput = () =>
@@ -412,7 +445,8 @@ window.addEventListener("keydown", (e) => {
     (e.target as HTMLElement).matches(
       "input,select,textarea,[contenteditable=true]",
     ) ||
-    $<HTMLDialogElement>("#menu-dialog").open
+    $<HTMLDialogElement>("#menu-dialog").open ||
+    $<HTMLDialogElement>("#midi-editor")?.open
   )
     return;
   const digit = /^Numpad[1-9]$/.test(e.code) ? e.code.slice(-1) : e.key;
@@ -421,18 +455,29 @@ window.addEventListener("keydown", (e) => {
     select(Number(digit) - 1);
     safely(async () => {
       await ready();
-      await engine.trigger(selected, e.shiftKey);
+      const id = Number(digit) - 1;
+      if (midiEditor!.timeline.armed)
+        await midiEditor!.perform(
+          id,
+          1,
+          `key:${e.code}`,
+          midiEditor!.audioTime(e.timeStamp),
+        );
+      else await engine.trigger(id, e.shiftKey);
     });
   }
   if (e.code === "Space") {
     e.preventDefault();
     safely(async () => {
       await ready();
-      if (engine.status === "playing") await engine.pause();
-      else await engine.play();
+      if (engine.status === "playing") await midiEditor!.pause();
+      else await midiEditor!.play();
     });
   }
 });
+window.addEventListener("keyup", (e) =>
+  midiEditor?.release(`key:${e.code}`, midiEditor.audioTime(e.timeStamp)),
+);
 function fit() {
   const scale = Math.min((innerWidth - 24) / 1536, (innerHeight - 44) / 1024);
   $(".machine").style.transform = `scale(${Math.max(0.15, scale)})`;
@@ -483,9 +528,9 @@ for (const id of [
 render();
 // Explicit adapter surface; no DS-9 connection or synchronization is implemented.
 export const transport = {
-  play: () => engine.play(),
-  pause: () => engine.pause(),
-  stop: () => engine.stop(),
+  play: () => midiEditor!.play(),
+  pause: () => midiEditor!.pause(),
+  stop: () => midiEditor!.stop(),
   trigger: (pad: number) => {
     if (!Number.isInteger(pad) || pad < 0 || pad > 8)
       throw new RangeError("Pad must be 0–8");
@@ -603,7 +648,7 @@ $("#rec").onclick = () =>
     recordBusy = true;
     try {
       await ready();
-      await engine.stop();
+      await midiEditor!.stop();
       recordPad = selected;
       await audioInput.start();
       $("#rec").classList.add("recording");
@@ -615,15 +660,26 @@ $("#rec").onclick = () =>
     }
   });
 const midi = new MidiLearn(
-  (target, value, trigger) => {
+  (target, value, trigger, info) => {
     safely(async () => {
       if (target.startsWith("pad:")) {
+        if (info?.release) {
+          midiEditor?.release(info.key, midiEditor.audioTime(info.timestamp));
+          return;
+        }
         if (!trigger) return;
         const id = Number(target.split(":")[1]);
         if (!Number.isInteger(id) || id < 0 || id > 8) return;
         select(id);
         await ready();
-        await engine.trigger(id, true);
+        if (midiEditor!.timeline.armed)
+          await midiEditor!.perform(
+            id,
+            value,
+            info?.key ?? `midi:${id}`,
+            info ? midiEditor!.audioTime(info.timestamp) : undefined,
+          );
+        else await engine.trigger(id, true, value);
         return;
       }
       if (target === "level") {
@@ -675,3 +731,46 @@ $("#menu-dialog").addEventListener("close", () => {
 window.addEventListener("pagehide", () => {
   audioInput.stream?.getTracks().forEach((t) => t.stop());
 });
+
+// Per-instance event adapter: independent of Microseq or any host implementation.
+midiEditor = new MidiEditor({
+  ready,
+  render,
+  canLoad: () => !audioInput.recording && !recordBusy,
+  globals: () => ({
+    sr,
+    bits,
+    master: Number($<HTMLInputElement>("#master").value),
+    delayOn,
+    reverbOn,
+    delayAmount,
+    reverbAmount,
+  }),
+  applyGlobals: (g) => {
+    sr = g.sr;
+    bits = g.bits;
+    delayOn = g.delayOn;
+    reverbOn = g.reverbOn;
+    delayAmount = g.delayAmount;
+    reverbAmount = g.reverbAmount;
+    for (const [id, value] of Object.entries({
+      sr,
+      bits,
+      master: g.master,
+      delay: delayAmount,
+      reverb: reverbAmount,
+    })) {
+      $<HTMLInputElement>("#" + id).value = String(value);
+      if (id !== "master") updateKnob(id);
+    }
+    $("#delay-on").classList.toggle("lit", delayOn);
+    $("#reverb-on").classList.toggle("lit", reverbOn);
+    engine.degrade(sr, bits);
+    engine.volume(g.master);
+    engine.effects("delay", delayOn, delayAmount);
+    engine.effects("reverb", reverbOn, reverbAmount);
+  },
+});
+export const midiSession = midiEditor;
+document.addEventListener("input", () => midiEditor?.changed());
+document.addEventListener("change", () => midiEditor?.changed());
