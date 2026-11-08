@@ -1,3 +1,4 @@
+import { installViewportFit } from "./viewport";
 import { loadDemoSamples } from "./audio/demo";
 import { audioInput } from "./audio/input";
 import { MidiLearn } from "./midi";
@@ -433,14 +434,7 @@ window.addEventListener("keydown", (e) => {
     });
   }
 });
-function fit() {
-  const scale = Math.min((innerWidth - 24) / 1536, (innerHeight - 44) / 1024);
-  $(".machine").style.transform = `scale(${Math.max(0.15, scale)})`;
-  $(".viewport").style.width = 1536 * Math.max(0.15, scale) + "px";
-  $(".viewport").style.height = 1024 * Math.max(0.15, scale) + "px";
-}
-window.onresize = fit;
-fit();
+installViewportFit();
 setInterval(() => {
   document.querySelectorAll<HTMLElement>(".pad").forEach((el) => {
     const id = Number(el.dataset.pad),
