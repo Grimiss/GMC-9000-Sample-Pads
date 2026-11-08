@@ -1,3 +1,4 @@
+import { installViewportFit } from "./viewport";
 import { MidiEditor } from "./midi-editor";
 let midiEditor: MidiEditor | undefined;
 import { loadDemoSamples } from "./audio/demo";
@@ -478,14 +479,7 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) =>
   midiEditor?.release(`key:${e.code}`, midiEditor.audioTime(e.timeStamp)),
 );
-function fit() {
-  const scale = Math.min((innerWidth - 24) / 1536, (innerHeight - 44) / 1024);
-  $(".machine").style.transform = `scale(${Math.max(0.15, scale)})`;
-  $(".viewport").style.width = 1536 * Math.max(0.15, scale) + "px";
-  $(".viewport").style.height = 1024 * Math.max(0.15, scale) + "px";
-}
-window.onresize = fit;
-fit();
+installViewportFit();
 setInterval(() => {
   document.querySelectorAll<HTMLElement>(".pad").forEach((el) => {
     const id = Number(el.dataset.pad),
