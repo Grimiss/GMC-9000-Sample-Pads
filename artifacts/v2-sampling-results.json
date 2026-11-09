@@ -1,0 +1,17 @@
+{
+  "passed": [
+    "Clear has safe audio undo",
+    "Hold empty pad records and assigns on release",
+    "Granular pitch/stretch and fades preserve original audio",
+    "Waveform drag trims audible start",
+    "Trim undo restores original region",
+    "Continuous LOOP ignores CYCLE rest count",
+    "Probability zero makes a CYCLE silent",
+    "Internal resampling captures output and FX without replacing sources",
+    "Occupied resample destinations are protected",
+    "Resampler nodes disconnect after capture",
+    "Character bypass and resonance are real DSP parameters",
+    "No browser errors"
+  ],
+  "errors": []
+}

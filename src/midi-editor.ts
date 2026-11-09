@@ -267,6 +267,13 @@ export class MidiEditor {
       this.status.textContent = e instanceof Error ? e.message : String(e);
     }
   }
+  getGlobals() {
+    return this.callbacks.globals();
+  }
+  setGlobals(g: GlobalSettings) {
+    this.callbacks.applyGlobals(g);
+    this.changed();
+  }
   changed() {
     if (this.readyState) this.dirty = true;
   }

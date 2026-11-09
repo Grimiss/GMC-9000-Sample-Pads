@@ -28,5 +28,5 @@ export function createEffects(
   input.connect(convolver);
   convolver.connect(reverbWet);
   reverbWet.connect(output);
-  return { delay, delayWet, reverbWet };
+  return { delay, delayWet, reverbWet, feedback };
 }

@@ -11,6 +11,16 @@ export interface Pad {
   rest: number;
   loop: boolean;
   armed: boolean;
+  mode?: "ONE SHOT" | "LOOP" | "CYCLE";
+  pitch?: number;
+  stretch?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  crossfade?: number;
+  pan?: number;
+  probability?: number;
+  every?: number;
+  retrigger?: "layer" | "replace";
 }
 const names = [
   "Forest Ambience",
@@ -55,10 +65,13 @@ export function randomCounts(random = Math.random) {
   };
 }
 export function regionDuration(
-  p: Pick<Pad, "start" | "end" | "speed">,
+  p: Pick<Pad, "start" | "end" | "speed" | "stretch">,
   duration: number,
 ) {
-  return Math.max(0.001, ((p.end - p.start) * duration) / p.speed);
+  return Math.max(
+    0.001,
+    ((p.end - p.start) * duration * (p.stretch ?? 1)) / p.speed,
+  );
 }
 export function phaseAt(
   elapsed: number,

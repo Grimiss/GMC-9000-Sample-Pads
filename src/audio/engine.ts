@@ -1,3 +1,5 @@
+import { preparedRegion } from "./region";
+import { modeOf, cycleAllowed, studio, type FXState } from "../v2/model";
 import { createEffects } from "./effects";
 import { pads, regionDuration, phaseAt } from "../state";
 interface Voice {
@@ -9,6 +11,7 @@ interface Voice {
   owner: string;
   velocity: number;
   occurrence?: string;
+  panner: StereoPannerNode;
 }
 /** AudioContext time is the sole transport clock. The timer only fills a look-ahead queue. */
 export class Sampler {
@@ -26,6 +29,14 @@ export class Sampler {
   next = new Map<number, number>();
   timer = 0;
   seqEnabled = true;
+  output!: GainNode;
+  limiter!: DynamicsCompressorNode;
+  filter!: BiquadFilterNode;
+  characterFilter!: BiquadFilterNode;
+  drive!: WaveShaperNode;
+  feedback!: GainNode;
+  random = Math.random;
+  private decisions = new Map<string, boolean>();
   private initializing: Promise<void> | null = null;
   async init() {
     if (this.initializing) await this.initializing;
@@ -53,9 +64,29 @@ export class Sampler {
     this.master = c.createGain();
     this.master.gain.value = 0.7;
     this.crusher = new AudioWorkletNode(c, "gmc-crusher");
-    this.crusher.connect(this.master);
-    this.master.connect(c.destination);
-    Object.assign(this, createEffects(c, this.crusher, this.master));
+    this.characterFilter = c.createBiquadFilter();
+    this.characterFilter.type = "lowpass";
+    this.characterFilter.frequency.value = 22000;
+    this.drive = c.createWaveShaper();
+    this.filter = c.createBiquadFilter();
+    this.filter.type = "lowpass";
+    this.filter.frequency.value = 22000;
+    this.crusher.connect(this.characterFilter);
+    this.characterFilter.connect(this.drive);
+    this.drive.connect(this.filter);
+    this.filter.connect(this.master);
+    this.limiter = c.createDynamicsCompressor();
+    this.limiter.threshold.value = -3;
+    this.limiter.knee.value = 6;
+    this.limiter.ratio.value = 20;
+    this.limiter.attack.value = 0.003;
+    this.limiter.release.value = 0.15;
+    this.output = c.createGain();
+    this.master.connect(this.limiter);
+    this.limiter.connect(this.output);
+    this.output.connect(c.destination);
+    Object.assign(this, createEffects(c, this.filter, this.master));
+    this.setFX(studio.fx);
     this.degrade(12000, 10);
     this.timer = window.setInterval(() => this.schedule(), 25);
   }
@@ -76,7 +107,9 @@ export class Sampler {
     if (this.status === "paused") await this.play();
     const p = pads[id];
     if (!p.buffer) return;
-    if (independent || !p.loop) {
+    if (independent || modeOf(p) === "ONE SHOT") {
+      if (p.retrigger === "replace")
+        this.cancelPadOwner(id, independent ? "manual" : "manual");
       if (this.status === "stopped") {
         this.status = "playing";
         this.epoch = this.context.currentTime;
@@ -138,6 +171,8 @@ export class Sampler {
     this.cancelPadOwner(id, "seq");
     this.origins.set(id, this.context.currentTime + 0.01);
     this.next.set(id, 0);
+    for (const key of this.decisions.keys())
+      if (key.startsWith(`${id}/`)) this.decisions.delete(key);
   }
   changed(id: number) {
     if (this.status !== "stopped" && pads[id].armed) this.resetPad(id);
@@ -172,26 +207,51 @@ export class Sampler {
     if (!p.buffer) return;
     const c = this.context;
     const source = c.createBufferSource();
-    source.buffer = p.reverse ? this.reversed(p.buffer) : p.buffer;
-    source.playbackRate.value = p.speed;
+    const prepared = preparedRegion({
+      ...p,
+      reverse: p.reverse !== studio.fx.reverse,
+    });
+    source.buffer =
+      prepared ??
+      (p.reverse !== studio.fx.reverse ? this.reversed(p.buffer) : p.buffer);
+    source.playbackRate.value = p.speed * 2 ** (studio.fx.pitch / 12);
     const gain = c.createGain();
     gain.gain.value = p.level * velocity;
+    const panner = c.createStereoPanner();
+    panner.pan.value = p.pan ?? 0;
     source.connect(gain);
-    gain.connect(this.crusher);
-    const duration = (p.end - p.start) * p.buffer.duration;
-    const start = (p.reverse ? 1 - p.end : p.start) * p.buffer.duration;
+    gain.connect(panner);
+    panner.connect(this.crusher);
+    const duration = prepared
+      ? prepared.duration
+      : (p.end - p.start) * p.buffer.duration;
+    const start = prepared
+      ? 0
+      : (p.reverse !== studio.fx.reverse ? 1 - p.end : p.start) *
+        p.buffer.duration;
+    const actualRate = source.playbackRate.value,
+      total = Math.max(0.001, duration / actualRate - offset),
+      edge = Math.min(0.002, total / 4);
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(p.level * velocity, when + edge);
+    gain.gain.setValueAtTime(
+      p.level * velocity,
+      when + Math.max(edge, total - edge),
+    );
+    gain.gain.linearRampToValueAtTime(0, when + total);
     source.start(
       when,
-      start + offset * p.speed,
-      Math.max(0.001, duration - offset * p.speed),
+      start + offset * actualRate,
+      Math.max(0.001, duration - offset * actualRate),
     );
     const v = {
       source,
       gain,
       start: when,
-      end: when + duration / p.speed - offset,
+      end: when + duration / actualRate - offset,
       pad: id,
       owner,
+      panner,
       velocity,
       occurrence,
     };
@@ -199,6 +259,7 @@ export class Sampler {
     source.onended = () => {
       source.disconnect();
       gain.disconnect();
+      panner.disconnect();
       this.voices = this.voices.filter((x) => x !== v);
     };
   }
@@ -252,7 +313,8 @@ export class Sampler {
     if (this.status !== "playing") return;
     const now = this.context.currentTime;
     for (const p of pads) {
-      if (!this.seqEnabled || !p.buffer || !p.armed || !p.loop) continue;
+      if (!this.seqEnabled || !p.buffer || !p.armed || modeOf(p) === "ONE SHOT")
+        continue;
       const origin = this.origins.get(p.id);
       if (origin === undefined) continue;
       const d = regionDuration(p, p.buffer.duration);
@@ -261,7 +323,16 @@ export class Sampler {
       let guard = 0;
       while (origin + n * d < now + 0.12 && guard++ < 256) {
         const t = origin + n * d;
-        if (n % (p.play + p.rest) < p.play) {
+        const cycle = Math.floor(n / (p.play + p.rest)),
+          key = `${p.id}/${cycle}`;
+        if (!this.decisions.has(key))
+          this.decisions.set(key, cycleAllowed(p, cycle, this.random));
+        if (this.decisions.size > 1024)
+          this.decisions.delete(this.decisions.keys().next().value!);
+        if (
+          modeOf(p) === "LOOP" ||
+          (n % (p.play + p.rest) < p.play && this.decisions.get(key))
+        ) {
           const late = Math.max(0, now - t);
           if (late < d) this.voice(p.id, Math.max(now, t), late, "seq");
         }
@@ -277,9 +348,51 @@ export class Sampler {
     return phaseAt(
       this.context.currentTime - o,
       regionDuration(p, p.buffer.duration),
-      p.play,
-      p.rest,
+      modeOf(p) === "LOOP" ? 1 : p.play,
+      modeOf(p) === "LOOP" ? 0 : p.rest,
     );
+  }
+  setFX(fx: FXState, when = this.context?.currentTime ?? 0, ramp = 0.015) {
+    if (!this.context) return;
+    const at = Math.max(this.context.currentTime, when);
+    const param = (p: AudioParam, v: number) => {
+      p.setTargetAtTime(v, at, Math.max(0.001, ramp));
+    };
+    param(
+      this.characterFilter.frequency,
+      fx.characterBypass ? 22000 : fx.bandwidth,
+    );
+    param(this.filter.frequency, fx.filter);
+    param(this.filter.Q, fx.resonance);
+    const amount = fx.characterBypass ? 0 : fx.saturation * fx.characterAmount,
+      curve = new Float32Array(2048);
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      curve[i] = amount
+        ? Math.tanh(x * (1 + amount * 8)) / Math.tanh(1 + amount * 8)
+        : x;
+    }
+    this.drive.curve = curve;
+    this.crusher.port.postMessage({
+      amount: fx.characterBypass ? 0 : fx.characterAmount,
+      stutter: fx.stutter,
+      stutterSeconds: fx.stutterSeconds,
+      when: at,
+    });
+    param(this.delay.delayTime, fx.delayTime);
+    param(this.feedback.gain, fx.delayFeedback);
+    for (const v of this.voices)
+      param(v.source.playbackRate, pads[v.pad].speed * 2 ** (fx.pitch / 12));
+  }
+  stopOwnerAt(owner: string, when: number, fade = 0) {
+    for (const v of this.voices.filter((v) => v.owner === owner)) {
+      v.gain.gain.cancelScheduledValues(when);
+      v.gain.gain.setValueAtTime(v.gain.gain.value, when);
+      v.gain.gain.linearRampToValueAtTime(0, when + Math.max(0.003, fade));
+      try {
+        v.source.stop(when + Math.max(0.004, fade));
+      } catch {}
+    }
   }
   degrade(rate: number, bits: number) {
     this.crusher?.port.postMessage({ rate, bits });

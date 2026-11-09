@@ -1,3 +1,5 @@
+import { modeOf, studio } from "./v2/model";
+import { StudioUI } from "./v2/ui";
 import { installViewportFit } from "./viewport";
 import { MidiEditor } from "./midi-editor";
 let midiEditor: MidiEditor | undefined;
@@ -6,12 +8,18 @@ import { audioInput } from "./audio/input";
 import { MidiLearn } from "./midi";
 import { hardwareMarkup } from "./interface";
 import "./style.css";
-import { pads, randomCounts, settings, type PadSettings } from "./state";
+import {
+  pads,
+  randomCounts,
+  settings,
+  type Pad,
+  type PadSettings,
+} from "./state";
 import { engine } from "./audio/engine";
 let selected = 0,
   clipboard: PadSettings | null = null;
-let history: PadSettings[][] = [],
-  future: PadSettings[][] = [];
+let history: Pad[][] = [],
+  future: Pad[][] = [];
 let sr = 12000,
   bits = 10,
   delayOn = false,
@@ -30,13 +38,13 @@ function message(s: string) {
   $("#status").textContent = s;
 }
 function checkpoint() {
-  history.push(pads.map(settings));
+  history.push(pads.map((p) => ({ ...p })));
   if (history.length > 40) history.shift();
   future = [];
 }
-function apply(snapshot: PadSettings[]) {
+function apply(snapshot: Pad[]) {
   snapshot.forEach((s, i) => {
-    Object.assign(pads[i], s);
+    pads[i] = { ...s };
     engine.changed(i);
   });
   render();
@@ -51,7 +59,7 @@ function render() {
   const p = pads[selected];
   $("#lcd-number").textContent = String(selected + 1).padStart(2, "0");
   $("#lcd-name").textContent = p.name;
-  $("#loop").textContent = p.loop ? "LOOP" : "SHOT";
+  $("#loop").textContent = modeOf(p);
   $<HTMLInputElement>("#play-count").value = String(p.play);
   $<HTMLInputElement>("#rest-count").value = String(p.rest);
   for (const key of ["start", "end", "speed"] as const) {
@@ -157,6 +165,7 @@ $("#file").onchange = () =>
   safely(async () => {
     const input = $<HTMLInputElement>("#file");
     const files = Array.from(input.files ?? []);
+    checkpoint();
     for (let i = 0; i < Math.min(files.length, 9); i++) {
       const id = (selected + i) % 9;
       if (!/\.wav$/i.test(files[i].name))
@@ -252,11 +261,15 @@ for (const key of ["play", "rest"] as const) {
 }
 $("#loop").onclick = () => {
   checkpoint();
-  pads[selected].loop = !pads[selected].loop;
-  if (!pads[selected].loop) {
+  const p = pads[selected],
+    modes = ["ONE SHOT", "LOOP", "CYCLE"] as const;
+  p.mode = modes[(modes.indexOf(modeOf(p)) + 1) % 3];
+  p.loop = p.mode !== "ONE SHOT";
+  if (!p.loop) {
     engine.cancel(selected);
-    pads[selected].armed = false;
-  } else engine.changed(selected);
+    p.armed = false;
+  }
+  engine.changed(selected);
   render();
 };
 for (const key of ["start", "end", "speed"] as const) {
@@ -320,8 +333,8 @@ for (const id of ["sr", "bits"])
     updateKnob(id);
   };
 for (const [id, rate, depth] of [
-  ["era80", 12000, 10],
-  ["era90", 22050, 12],
+  ["era80", 26000, 12],
+  ["era90", 44100, 16],
   ["era00", 44100, 16],
 ] as const) {
   $("#" + id).onclick = () => {
@@ -329,6 +342,12 @@ for (const [id, rate, depth] of [
     bits = depth;
     $<HTMLInputElement>("#sr").value = String(sr);
     $<HTMLInputElement>("#bits").value = String(bits);
+    Object.assign(studio.fx, {
+      characterBypass: false,
+      bandwidth: id === "era80" ? 10500 : id === "era90" ? 18500 : 22000,
+      saturation: id === "era80" ? 0.18 : id === "era90" ? 0.035 : 0,
+    });
+    engine.setFX(studio.fx);
     engine.degrade(sr, bits);
     ["era80", "era90", "era00"].forEach((x) =>
       $("#" + x).classList.toggle("lit", x === id),
@@ -369,18 +388,19 @@ $("#paste").onclick = () => {
 $("#undo").onclick = () => {
   const previous = history.pop();
   if (previous) {
-    future.push(pads.map(settings));
+    future.push(pads.map((p) => ({ ...p })));
     apply(previous);
   }
 };
 $("#redo").onclick = () => {
   const next = future.pop();
   if (next) {
-    history.push(pads.map(settings));
+    history.push(pads.map((p) => ({ ...p })));
     apply(next);
   }
 };
 $("#clear").onclick = () => {
+  checkpoint();
   engine.cancel(selected);
   Object.assign(pads[selected], {
     buffer: null,
@@ -614,6 +634,7 @@ async function finishRecording() {
   try {
     const buffer = await audioInput.stop();
     if (buffer) {
+      checkpoint();
       engine.cancel(recordPad);
       Object.assign(pads[recordPad], {
         buffer,
@@ -644,6 +665,8 @@ $("#rec").onclick = () =>
       await ready();
       await midiEditor!.stop();
       recordPad = selected;
+      if (!audioInput.source)
+        await audioInput.connect($<HTMLSelectElement>("#audio-input").value);
       await audioInput.start();
       $("#rec").classList.add("recording");
       ioMessage(
@@ -768,3 +791,14 @@ midiEditor = new MidiEditor({
 export const midiSession = midiEditor;
 document.addEventListener("input", () => midiEditor?.changed());
 document.addEventListener("change", () => midiEditor?.changed());
+
+export const appUI = {
+  selected: () => selected,
+  select,
+  render,
+  checkpoint,
+  ready,
+  finishRecording,
+  midi: midiEditor,
+};
+export const v2UI = new StudioUI(appUI);
