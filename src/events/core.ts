@@ -306,7 +306,9 @@ export class EventEngine {
       return;
     }
     const start =
-        fromBeat !== undefined && this.store.state.clockMode === "FREE"
+        fromBeat !== undefined &&
+        (this.store.state.clockMode === "FREE" ||
+          this.store.state.clockSource === "internal")
           ? fromBeat
           : this.cursor === null
             ? s.beat

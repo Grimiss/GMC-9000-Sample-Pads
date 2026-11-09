@@ -278,7 +278,7 @@ try {
   const portable = JSON.parse(await fs.readFile(file, "utf8"));
   check(
     "Portable export includes actual deduplicated hashed WAV audio",
-    portable.version === 1 &&
+    portable.version === 2 &&
       Object.keys(portable.assets).length > 0 &&
       portable.pads.every((p) => p.asset && portable.assets[p.asset]?.data),
   );

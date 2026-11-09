@@ -26,6 +26,8 @@ export class SongController {
   private applying = false;
   private onComplete: (() => void) | null = null;
   private scheduledIndex = -1;
+  private endScheduled = false;
+  private autoManual = false;
   constructor(public ui: StudioUI) {
     ui.el("quick-scene").onclick = () => this.capture();
     ui.el("song-content").innerHTML =
@@ -70,6 +72,8 @@ export class SongController {
         const s = this.selected();
         if (s) {
           await ui.app.ready();
+          if (engine.context.state === "suspended")
+            await engine.context.resume();
           this.queueRecall(s);
         }
       });
@@ -166,12 +170,14 @@ export class SongController {
       ui.safe(async () => {
         await ui.app.ready();
         studio.automation.enabled = true;
+        this.autoManual = true;
         this.automationStart = engine.context.currentTime;
         this.autoCursor = 0;
         this.changed();
       });
     ui.el("auto-stop").onclick = () => {
       studio.automation.enabled = false;
+      this.autoManual = false;
       this.automationRecording = false;
       this.changed();
     };
@@ -199,6 +205,26 @@ export class SongController {
           engine.context?.currentTime ?? 0,
         );
     });
+    document.addEventListener("click", (e) => {
+      const id = (e.target as HTMLElement).id,
+        now = engine.context?.currentTime ?? 0,
+        g = ui.app.midi.getGlobals();
+      if (id === "delay-on" || id === "reverb-on") {
+        const key = id === "delay-on" ? "delayOn" : "reverbOn";
+        this.record("global." + key, g[key] ? 1 : 0, now);
+      }
+      if (["era80", "era90", "era00"].includes(id)) {
+        this.record("global.sr", g.sr, now);
+        this.record("global.bits", g.bits, now);
+        for (const key of [
+          "bandwidth",
+          "saturation",
+          "characterAmount",
+          "characterBypass",
+        ] as const)
+          this.record(key, Number(studio.fx[key]), now);
+      }
+    });
     ui.el("song-export").onclick = () => ui.safe(() => ui.exportSong());
     ui.el("song-export-cancel").onclick = () =>
       ui.safe(() => ui.cancelExport());
@@ -207,6 +233,7 @@ export class SongController {
       this.paused = false;
       this.pending = null;
       this.automationRecording = false;
+      this.autoManual = false;
       this.automationStart = engine.context?.currentTime ?? 0;
       this.autoCursor = 0;
       this.refresh();
@@ -223,6 +250,7 @@ export class SongController {
     return {
       ...s,
       pads: s.pads.map((p) => ({ ...p })),
+      active: s.active ? [...s.active] : undefined,
       midi: structuredClone(s.midi),
       fx: { ...s.fx },
       globals: { ...s.globals },
@@ -241,6 +269,19 @@ export class SongController {
   > {
     return {
       pads: pads.map((p) => ({ ...p })),
+      active: pads
+        .filter(
+          (p) =>
+            p.armed ||
+            engine.voices.some(
+              (v) =>
+                v.pad === p.id &&
+                ["manual", "performance", "scene"].includes(v.owner) &&
+                v.start <= engine.context.currentTime &&
+                v.end > engine.context.currentTime,
+            ),
+        )
+        .map((p) => p.id),
       midi: structuredClone(this.ui.app.midi.store.state),
       globals: { ...this.ui.app.midi.getGlobals() },
       fx: { ...studio.fx },
@@ -293,6 +334,9 @@ export class SongController {
     return base;
   }
   queueRecall(scene: Scene) {
+    this.playing = false;
+    this.paused = false;
+    this.onComplete = null;
     const at = this.nextBoundary(scene, engine.context.currentTime);
     if (at - engine.context.currentTime > 0.12) {
       this.pending = scene;
@@ -318,6 +362,10 @@ export class SongController {
           a.reverse === b.reverse &&
           a.pitch === b.pitch &&
           a.stretch === b.stretch &&
+          a.fadeIn === b.fadeIn &&
+          a.fadeOut === b.fadeOut &&
+          a.crossfade === b.crossfade &&
+          studio.fx.reverse === scene.fx.reverse &&
           modeOf(a) === modeOf(b) &&
           a.armed &&
           b.armed;
@@ -360,6 +408,7 @@ export class SongController {
     const midi = this.ui.app.midi;
     engine.cancelPlan = { when: at, fade };
     midi.timeline.stop();
+    engine.cancelOwner("scene");
     const clips = new Map(midi.store.state.clips.map((c) => [c.id, c]));
     for (const c of scene.midi.clips) clips.set(c.id, structuredClone(c));
     midi.store.restore({
@@ -373,6 +422,13 @@ export class SongController {
     engine.status = "playing";
     if (scene.midi.playbackMode !== "SEQ") midi.timeline.playAt(at);
     engine.cancelPlan = null;
+    if (scene.midi.playbackMode !== "MIDI")
+      for (let i = 0; i < 9; i++)
+        if (
+          modeOf(pads[i]) === "ONE SHOT" &&
+          (scene.active?.includes(i) ?? pads[i].armed)
+        )
+          engine.scheduledTrigger(i, at, 1, "scene", scene.id);
     if (!scene.continueLoops) {
       this.automationStart = at;
       this.autoCursor = 0;
@@ -412,6 +468,8 @@ export class SongController {
       if (next) this.boundary = this.nextBoundary(next, this.boundary);
     }
     this.scheduledIndex = this.index;
+    this.endScheduled = false;
+    engine.songEnd = Infinity;
     this.ui.el("song-status").textContent =
       `PLAYING ${this.index + 1}/${studio.arrangement.length}: ${scene.name} · repeat ${this.iteration + 1}/${step.repeat}`;
   }
@@ -441,6 +499,7 @@ export class SongController {
   async jump(index: number) {
     if (!studio.arrangement.length) return;
     await this.ui.app.ready();
+    if (engine.context.state === "suspended") await engine.context.resume();
     this.index =
       (index + studio.arrangement.length) % studio.arrangement.length;
     this.iteration = 0;
@@ -463,6 +522,8 @@ export class SongController {
     else
       studio.automation.events.push({ id: uid(), parameter, time: t, value });
     this.ui.app.midi.changed();
+    this.ui.el("fx-auto-status").textContent =
+      `${this.automationRecording ? "● RECORDING · " : ""}${studio.automation.events.length} recorded movements`;
     this.ui.el("auto-status").textContent =
       `● RECORDING · ${studio.automation.events.length} movements`;
   }
@@ -475,13 +536,15 @@ export class SongController {
             string,
             number | boolean
           >;
-        g[key] = e.value;
+        g[key] = typeof g[key] === "boolean" ? !!e.value : e.value;
         this.ui.app.midi.setGlobals(g as unknown as GlobalSettings, at);
       } else {
         const key = e.parameter as keyof FXState;
         this.ui.fx(
           key,
-          ["stutter", "reverse", "characterBypass"].includes(key)
+          ["stutter", "reverse", "characterBypass", "filterBypass"].includes(
+            key,
+          )
             ? !!e.value
             : e.value,
           at,
@@ -493,7 +556,15 @@ export class SongController {
   }
   private tickAutomation(now: number) {
     const a = studio.automation;
-    if (!a.enabled || !a.events.length || now < this.automationStart) return;
+    if (
+      !a.enabled ||
+      !a.events.length ||
+      now < this.automationStart ||
+      (engine.status !== "playing" &&
+        !this.automationRecording &&
+        !this.autoManual)
+    )
+      return;
     const elapsed = now - this.automationStart,
       start =
         this.autoCursor === 0
@@ -501,6 +572,7 @@ export class SongController {
           : Math.max(this.autoCursor, elapsed),
       end = elapsed + 0.12;
     for (const e of a.events) {
+      if (e.time >= a.length) continue;
       const first = Math.max(0, Math.ceil((start - e.time - 1e-8) / a.length)),
         last = Math.floor((end - e.time - 1e-8) / a.length);
       for (let n = first; n <= last; n++)
@@ -532,6 +604,17 @@ export class SongController {
       this.iteration++;
       this.applyStep(this.boundary);
       return;
+    }
+    if (
+      this.index + 1 >= studio.arrangement.length &&
+      (!studio.loopSong || this.ui.exporting) &&
+      !this.endScheduled
+    ) {
+      engine.songEnd = this.boundary;
+      engine.stopOwnerAt("seq", this.boundary, 0.01);
+      engine.stopOwnerAt("midi", this.boundary, 0.01);
+      engine.stopOwnerAt("scene", this.boundary, 0.01);
+      this.endScheduled = true;
     }
     if (
       this.index + 1 >= studio.arrangement.length &&
@@ -582,6 +665,14 @@ export class SongController {
     }
     this.ui.input("auto-length").value = String(studio.automation.length);
     this.ui.el("auto-rec").classList.toggle("armed", this.automationRecording);
+    this.ui
+      .el("fx-auto-rec")
+      .classList.toggle("armed", this.automationRecording);
+    this.ui.el("fx-auto-rec").textContent = this.automationRecording
+      ? "STOP FX RECORDING"
+      : "RECORD FX MOVEMENTS";
+    this.ui.el("fx-auto-status").textContent =
+      `${this.automationRecording ? "● RECORDING · " : ""}${studio.automation.events.length} recorded movements`;
     this.ui.el("auto-status").textContent =
       `${this.automationRecording ? "● RECORDING · " : ""}${studio.automation.events.length} movements · ${studio.automation.length} second loop`;
     this.ui.el<HTMLInputElement>("song-loop-song").checked = studio.loopSong;

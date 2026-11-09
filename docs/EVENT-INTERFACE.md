@@ -1,5 +1,7 @@
 # Instrument-independent event contract — v1
 
+Historical pre-implementation contract. V2 adds explicit seconds/beat time bases and INTERNAL/HOST clock selection; see [V2 implementation](V2-IMPLEMENTATION.md) and [operating guide](V2-GUIDE.md). The v1 timing and persistence descriptions below apply to legacy projects.
+
 Written before implementation. GMC-9000, Microseq and DS-9 are standalone instruments. DM-848 is a separate eight-track host (1–4 tape loops; 5–8 instruments/external inputs). This task changes GMC-9000 only. No Microseq runtime, transport or repository is imported.
 
 ## Assumptions and boundaries

@@ -72,12 +72,13 @@ export function preparedRegion(p: Pad): AudioBuffer | null {
       Math.floor(length / 4),
     );
     if (overlap > 1) {
+      const boundary = (data[0] + data[length - 1]) * 0.5;
       for (let i = 0; i < overlap; i++) {
-        const t = i / (overlap - 1),
+        const t = 0.5 - 0.5 * Math.cos((Math.PI * i) / (overlap - 1)),
           a = data[i],
-          z = data[length - overlap + i];
-        data[i] = a * t + z * (1 - t);
-        data[length - overlap + i] = z * (1 - t) + a * t;
+          z = data[length - 1 - i];
+        data[i] = boundary * (1 - t) + a * t;
+        data[length - 1 - i] = boundary * (1 - t) + z * t;
       }
     }
     for (let i = 0; i < length; i++) {
@@ -92,4 +93,30 @@ export function preparedRegion(p: Pad): AudioBuffer | null {
   if (versions.size >= 8) versions.delete(versions.keys().next().value!);
   versions.set(key, out);
   return out;
+}
+
+/** Render one edited pad region, without the global effects bus. Original buffer is untouched. */
+export async function renderPad(p: Pad) {
+  if (!p.buffer) throw new Error("Selected pad is empty");
+  const buffer = preparedRegion({
+    ...p,
+    fadeIn: Math.max(p.fadeIn ?? 0, 1 / p.buffer.sampleRate),
+  })!;
+  const context = new OfflineAudioContext(
+    2,
+    Math.max(1, Math.ceil(buffer.length / p.speed)),
+    buffer.sampleRate,
+  );
+  const source = context.createBufferSource(),
+    gain = context.createGain(),
+    pan = context.createStereoPanner();
+  source.buffer = buffer;
+  source.playbackRate.value = p.speed;
+  gain.gain.value = p.level;
+  pan.pan.value = p.pan ?? 0;
+  source.connect(gain);
+  gain.connect(pan);
+  pan.connect(context.destination);
+  source.start();
+  return context.startRendering();
 }

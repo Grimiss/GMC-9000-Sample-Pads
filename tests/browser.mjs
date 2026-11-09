@@ -121,15 +121,15 @@ try {
     });
   }
   check("Actual mixed audio output is nonzero", (await rms()) > 0.01);
-  await page.waitForTimeout(170);
-  check(
-    "Independent PLAY / REST phases",
-    await page.evaluate(
-      () =>
-        !window.testEngine.phase(0).audible &&
-        window.testEngine.phase(1).audible,
-    ),
+  // Observe the actual audio clock rather than assuming a wall-clock delay
+  // lands inside the 150 ms overlap window on a loaded test executor.
+  const independent = await page.waitForFunction(
+    () =>
+      !window.testEngine.phase(0).audible && window.testEngine.phase(1).audible,
+    undefined,
+    { timeout: 3000, polling: 10 },
   );
+  check("Independent PLAY / REST phases", await independent.jsonValue());
   await page.click("#pause");
   const paused = await page.evaluate(
     () => window.testEngine.context.currentTime,

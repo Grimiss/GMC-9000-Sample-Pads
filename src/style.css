@@ -1322,3 +1322,17 @@ footer {
   border-color: #d98319;
   box-shadow: 0 0 5px orange;
 }
+body.exporting #app {
+  pointer-events: none;
+}
+body.exporting #v2-panel button,
+body.exporting #v2-panel input,
+body.exporting #v2-panel select {
+  pointer-events: none;
+  opacity: 0.5;
+}
+body.exporting #v2-panel #song-export-cancel {
+  pointer-events: auto;
+  opacity: 1;
+  background: #f8bf64;
+}

@@ -3,6 +3,7 @@ class Capture extends AudioWorkletProcessor {
     super();
     this.channels = [[], []];
     this.count = 0;
+    this.started = false;
     this.port.onmessage = ({ data }) => {
       if (data === "flush") {
         this.flush();
@@ -24,6 +25,10 @@ class Capture extends AudioWorkletProcessor {
     const input = inputs[0];
     for (const out of outputs[0] || []) out.fill(0);
     if (input?.length) {
+      if (!this.started) {
+        this.port.postMessage({ started: currentTime });
+        this.started = true;
+      }
       for (let i = 0; i < input[0].length; i++) {
         for (let c = 0; c < 2; c++)
           this.channels[c].push(input[c % input.length][i]);

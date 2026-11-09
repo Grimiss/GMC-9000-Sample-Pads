@@ -1,0 +1,14 @@
+{
+  "passed": [
+    "Production shell and audio worklets are cached offline",
+    "Offline reload can initialize worklet and play sample",
+    "All workflow controls fit 1024×768",
+    "All workflow controls fit 768×1024",
+    "All workflow controls fit 1180×820",
+    "All workflow controls fit 820×1180",
+    "All workflow controls fit 640×360",
+    "Touch workflow editor is available offline",
+    "No runtime errors"
+  ],
+  "errors": []
+}

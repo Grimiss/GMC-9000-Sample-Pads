@@ -1,9 +1,16 @@
+import { renderPad } from "../audio/region";
 import { SongController } from "./song";
 import { pads, settings, type Pad } from "../state";
 import { engine } from "../audio/engine";
 import { audioInput, AudioInput } from "../audio/input";
-import { wavBytes } from "../project";
-import { modeOf, padDefaults, studio, type FXState } from "./model";
+import { wavBytes, captureProject } from "../project";
+import {
+  modeOf,
+  padDefaults,
+  studio,
+  songSeconds,
+  type FXState,
+} from "./model";
 import type { MidiEditor } from "../midi-editor";
 interface AppUI {
   selected: () => number;
@@ -30,8 +37,13 @@ export class StudioUI {
   wave: HTMLCanvasElement;
   recorder = new AudioInput();
   resampling = false;
+  inputOwned = false;
+  private heldEnding: Promise<void> | null = null;
   destination = 0;
   exporting = false;
+  private exportRestore: unknown = null;
+  private exportToken = 0;
+  private exportPreparing = false;
   clipboard: Pad | null = null;
   zoom = 1;
   scroll = 0;
@@ -48,11 +60,11 @@ export class StudioUI {
       ["SAMPLE", "EDIT", "PLAY", "SONG"]
         .map((n) => `<button data-screen="${n}">${n}</button>`)
         .join("") +
-      '<button id="quick-resample">RESAMPLE</button><button id="quick-stutter">STUTTER</button><button id="quick-reverse">REVERSE FX</button><button id="quick-scene">CAPTURE SCENE</button>';
+      '<button id="quick-fx">FX</button><button id="quick-resample">RESAMPLE</button><button id="quick-stutter">STUTTER</button><button id="quick-reverse">REVERSE FX</button><button id="quick-scene">CAPTURE SCENE</button>';
     document.querySelector("#app")!.append(nav);
     this.dialog = document.createElement("dialog");
     this.dialog.id = "v2-panel";
-    this.dialog.innerHTML = `<h2 id="v2-title">GMC-9000 · SAMPLE</h2><div class="v2-tabs">${["SAMPLE", "EDIT", "PLAY", "SONG"].map((n) => `<button data-screen="${n}">${n}</button>`).join("")}<button id="v2-close">BACK TO PADS</button></div><p id="v2-status" role="status">Ready. All edits are non-destructive.</p><div id="v2-sample" class="v2-section"><p>Choose a pad, then record or import. Hold an empty hardware pad to record and release to finish. Microphone access requires HTTPS and permission.</p><label>PAD <select id="v2-pad"></select></label><button id="v2-rec">REC / FINISH INPUT</button><button id="v2-import">IMPORT WAV</button><button id="v2-audition">AUDITION</button><label>OTHER PAD <select id="v2-other"></select></label><button id="v2-copy">COPY AUDIO + SETTINGS</button><button id="v2-duplicate">DUPLICATE TO OTHER</button><button id="v2-swap">SWAP PADS</button><button id="v2-clear">CLEAR (UNDOABLE)</button><button id="v2-export-pad">EXPORT SELECTED WAV</button><button id="v2-undo">UNDO PAD EDIT</button><button id="v2-redo">REDO PAD EDIT</button><p>Drop WAV files directly onto a hardware pad. Settings-only COPY/PASTE remain on the chassis.</p></div><div id="v2-edit" class="v2-section"><canvas id="v2-wave" width="1000" height="200" aria-label="Waveform with draggable start and end trim markers"></canvas><label>ZOOM <input id="v2-zoom" type="range" min="1" max="32" value="1" step=".1"></label><label>SCROLL <input id="v2-scroll" type="range" min="0" max="1" value="0" step=".001"></label><div class="v2-grid">${[
+    this.dialog.innerHTML = `<h2 id="v2-title">GMC-9000 · SAMPLE</h2><div class="v2-tabs">${["SAMPLE", "EDIT", "PLAY", "SONG"].map((n) => `<button data-screen="${n}">${n}</button>`).join("")}<button id="v2-effects">EFFECTS</button><button id="v2-close">BACK TO PADS</button></div><p id="v2-status" role="status">Ready. All edits are non-destructive.</p><div id="v2-sample" class="v2-section"><p>Choose a pad, then record or import. Hold an empty hardware pad to record and release to finish. Microphone access requires HTTPS and permission.</p><label>PAD <select id="v2-pad"></select></label><button id="v2-rec">REC / FINISH INPUT</button><button id="v2-import">IMPORT WAV</button><button id="v2-audition">AUDITION</button><label>OTHER PAD <select id="v2-other"></select></label><button id="v2-copy">COPY AUDIO + SETTINGS</button><button id="v2-duplicate">DUPLICATE TO OTHER</button><button id="v2-swap">SWAP PADS</button><button id="v2-clear">CLEAR (UNDOABLE)</button><button id="v2-export-pad">EXPORT EDITED WAV</button><button id="v2-export-original">EXPORT ORIGINAL WAV</button><button id="v2-load-project">LOAD PROJECT</button><button id="v2-legacy-export">EXPORT LEGACY SETTINGS</button><button id="v2-undo">UNDO PAD EDIT</button><button id="v2-redo">REDO PAD EDIT</button><p>Drop WAV files directly onto a hardware pad. Settings-only COPY/PASTE remain on the chassis.</p></div><div id="v2-edit" class="v2-section"><canvas id="v2-wave" width="1000" height="200" aria-label="Waveform with draggable start and end trim markers"></canvas><label>ZOOM <input id="v2-zoom" type="range" min="1" max="32" value="1" step=".1"></label><label>SCROLL <input id="v2-scroll" type="range" min="0" max="1" value="0" step=".001"></label><div class="v2-grid">${[
       ["start", 0, 0.999, 0.001],
       ["end", 0.001, 1, 0.001],
       ["speed", 0.25, 2, 0.01],
@@ -91,13 +103,15 @@ export class StudioUI {
       )
       .join(
         "",
-      )}</div><label><input id="fx-characterBypass" type="checkbox"> CHARACTER BYPASS</label><label><input id="fx-stutter" type="checkbox"> STUTTER ON</label><label><input id="fx-reverse" type="checkbox"> REVERSE NEW VOICES</label><p>Delay/reverb amounts and ON switches remain on the hardware panel. Filter bypass: fully open at 22 kHz; resonance defaults to 0.707. Reverse affects new voices and does not reverse already sounding buffers.</p><h3>INTERNAL RESAMPLING</h3><label>DESTINATION <select id="resample-destination"></select></label><button id="resample-start">START OUTPUT CAPTURE</button><button id="resample-stop">FINISH / ASSIGN</button><p>Captures the audible stereo output, including active pads and live effect changes. Destination must be empty. Sources are never overwritten; clear/undo or select an empty pad first. Recording has a muted capture output to avoid feedback.</p></div><div id="v2-song" class="v2-section"><div id="song-content"></div></div>`;
+      )}</div><label><input id="fx-characterBypass" type="checkbox"> CHARACTER BYPASS</label><label><input id="fx-stutter" type="checkbox"> STUTTER ON</label><label><input id="fx-reverse" type="checkbox"> REVERSE NEW VOICES</label><label><input id="fx-filterBypass" type="checkbox"> FILTER BYPASS</label><label><input id="fx-delay-enabled" type="checkbox"> DELAY ON</label><label>DELAY WET <input id="fx-delay-wet" type="range" min="0" max=".8" step=".01"></label><label><input id="fx-reverb-enabled" type="checkbox"> REVERB ON</label><label>REVERB WET <input id="fx-reverb-wet" type="range" min="0" max=".8" step=".01"></label><button id="fx-auto-rec">RECORD FX MOVEMENTS</button><button id="fx-auto-play">PLAY / LOOP FX</button><button id="fx-auto-stop">STOP FX AUTOMATION</button><p id="fx-auto-status"></p><p>Wet controls mirror the hardware; dry output remains present. Reverse affects new voices; use sample REV to restart an active loop in reverse.</p><h3>INTERNAL RESAMPLING</h3><label>DESTINATION <select id="resample-destination"></select></label><button id="resample-start">START OUTPUT CAPTURE</button><button id="resample-stop">FINISH / ASSIGN</button><p>Captures the audible stereo output, including active pads and live effect changes. Destination must be empty. Sources are never overwritten; clear/undo or select an empty pad first. Recording has a muted capture output to avoid feedback.</p></div><div id="v2-song" class="v2-section"><div id="song-content"></div></div>`;
     document.body.append(this.dialog);
     this.wave = this.el("v2-wave");
     document
       .querySelectorAll<HTMLElement>("[data-screen]")
       .forEach((b) => (b.onclick = () => this.open(b.dataset.screen!)));
     this.el("v2-close").onclick = () => this.dialog.close();
+    for (const id of ["quick-fx", "v2-effects"])
+      this.el(id).onclick = () => this.open("PLAY", true);
     for (const id of ["v2-pad", "v2-other", "resample-destination"]) {
       const select = this.el<HTMLSelectElement>(id);
       for (let i = 0; i < 9; i++)
@@ -131,7 +145,7 @@ export class StudioUI {
         target = Number(this.input("v2-other").value);
       app.checkpoint();
       engine.cancel(target);
-      Object.assign(pads[target], source, { id: target, armed: false });
+      pads[target] = { ...source, id: target, armed: false };
       this.changed();
       this.status(
         `Duplicated audio into PAD ${target + 1}; UNDO restores its previous sample.`,
@@ -145,8 +159,9 @@ export class StudioUI {
       engine.cancel(a);
       engine.cancel(b);
       const old = { ...pads[a] };
-      Object.assign(pads[a], pads[b], { id: a, armed: false });
-      Object.assign(pads[b], old, { id: b, armed: false });
+      const other = { ...pads[b] };
+      pads[a] = { ...other, id: a, armed: false };
+      pads[b] = { ...old, id: b, armed: false };
       this.changed();
     };
     this.el("v2-clear").onclick = () => {
@@ -165,13 +180,23 @@ export class StudioUI {
       };
     this.el("v2-export-pad").onclick = () =>
       this.safe(async () => {
-        const b = pads[app.selected()].buffer;
-        if (!b) throw new Error("Selected pad is empty");
-        downloadWav(b, pads[app.selected()].name);
+        const p = pads[app.selected()];
+        downloadWav(await renderPad(p), p.name + " edited");
         this.status(
-          "Exported original audio. Use resampling to export edits/effects.",
+          "Exported edited region, speed, pitch/stretch, fades, level and pan. Use RESAMPLE for global effects.",
         );
       });
+    this.el("v2-export-original").onclick = () =>
+      this.safe(() => {
+        const p = pads[app.selected()];
+        if (!p.buffer) throw new Error("Selected pad is empty");
+        downloadWav(p.buffer, p.name + " original");
+      });
+    this.el("v2-load-project").onclick = () => this.el("project-load").click();
+    this.el("v2-legacy-export").onclick = () =>
+      this.el("save").dispatchEvent(
+        new MouseEvent("click", { shiftKey: true, bubbles: true }),
+      );
     document
       .querySelectorAll<HTMLInputElement>("[data-pad-field]")
       .forEach((input) => {
@@ -198,6 +223,7 @@ export class StudioUI {
       const p = pads[app.selected()];
       p.mode = this.input("v2-mode").value as Pad["mode"];
       p.loop = p.mode !== "ONE SHOT";
+      if (p.mode === "LOOP" && p.crossfade === undefined) p.crossfade = 0.005;
       if (!p.loop) {
         engine.cancel(p.id);
         p.armed = false;
@@ -233,7 +259,7 @@ export class StudioUI {
               Number(input.value),
             )),
       );
-    for (const id of ["characterBypass", "stutter", "reverse"])
+    for (const id of ["characterBypass", "stutter", "reverse", "filterBypass"])
       this.el("fx-" + id).onchange = () =>
         this.fx(
           id as keyof FXState,
@@ -257,7 +283,55 @@ export class StudioUI {
       );
     this.el("resample-stop").onclick = () =>
       this.safe(() => this.finishResample());
+    const learn = this.el<HTMLSelectElement>("midi-target");
+    for (const key of [
+      "filter",
+      "resonance",
+      "pitch",
+      "characterAmount",
+      "bandwidth",
+      "saturation",
+      "stutterSeconds",
+      "delayTime",
+      "delayFeedback",
+    ])
+      learn.add(new Option("FX " + key, "fx-" + key));
     this.song = new SongController(this);
+    for (const kind of ["delay", "reverb"] as const) {
+      this.el("fx-" + kind + "-wet").oninput = () => {
+        const g = this.app.midi.getGlobals(),
+          key = kind === "delay" ? "delayAmount" : "reverbAmount",
+          value = Number(this.input("fx-" + kind + "-wet").value);
+        g[key] = value;
+        this.app.midi.setGlobals(g);
+        this.song.record(
+          "global." + key,
+          value,
+          engine.context?.currentTime ?? 0,
+        );
+      };
+      this.el("fx-" + kind + "-enabled").onchange = () => {
+        const g = this.app.midi.getGlobals(),
+          key = kind === "delay" ? "delayOn" : "reverbOn",
+          on = this.el<HTMLInputElement>("fx-" + kind + "-enabled").checked;
+        g[key] = on;
+        this.app.midi.setGlobals(g);
+        this.song.record(
+          "global." + key,
+          on ? 1 : 0,
+          engine.context?.currentTime ?? 0,
+        );
+      };
+    }
+    this.el("fx-auto-rec").onclick = () => this.el("auto-rec").click();
+    this.el("fx-auto-play").onclick = () => this.el("auto-play").click();
+    this.el("fx-auto-stop").onclick = () => this.el("auto-stop").click();
+    this.dialog.addEventListener("cancel", (e) => {
+      if (this.exporting) {
+        e.preventDefault();
+        this.status("Use CANCEL EXPORT to restore the original session");
+      }
+    });
     this.installWave();
     this.installHoldAndDrop();
     this.refresh();
@@ -304,6 +378,7 @@ export class StudioUI {
     value: number | boolean,
     when = engine.context?.currentTime ?? 0,
   ) {
+    if (key === "filter") studio.fx.filterBypass = false;
     (studio.fx as unknown as Record<string, unknown>)[key] = value;
     engine.setFX(studio.fx, when);
     this.app.midi.changed();
@@ -313,6 +388,14 @@ export class StudioUI {
     this.refreshFX();
   }
   refreshFX() {
+    const g = this.app.midi.getGlobals();
+    for (const kind of ["delay", "reverb"] as const) {
+      this.input("fx-" + kind + "-wet").value = String(
+        kind === "delay" ? g.delayAmount : g.reverbAmount,
+      );
+      this.el<HTMLInputElement>("fx-" + kind + "-enabled").checked =
+        kind === "delay" ? g.delayOn : g.reverbOn;
+    }
     for (const key of Object.keys(studio.fx) as (keyof FXState)[]) {
       const input = document.getElementById(
         "fx-" + key,
@@ -434,7 +517,12 @@ export class StudioUI {
     this.wave.onpointercancel = () => (marker = null);
   }
   async startResample(destination: number) {
-    if (this.exporting || this.resampling || audioInput.recording)
+    if (
+      this.exporting ||
+      this.exportPreparing ||
+      this.resampling ||
+      audioInput.recording
+    )
       throw new Error("Finish the current recording first");
     if (pads[destination].buffer)
       throw new Error(
@@ -442,6 +530,8 @@ export class StudioUI {
       );
     await this.app.ready();
     this.destination = destination;
+    this.recorder.maxFrames = Infinity;
+    this.recorder.overflow = null;
     await this.recorder.start(engine.output);
     this.resampling = true;
     this.status(
@@ -475,12 +565,133 @@ export class StudioUI {
     }
   }
   async exportSong() {
-    throw new Error("Song export is wired in stage 3");
+    if (
+      this.exporting ||
+      this.exportPreparing ||
+      this.resampling ||
+      audioInput.recording
+    )
+      throw new Error("Finish recording/resampling first");
+    if (!studio.arrangement.length)
+      throw new Error("Build a song arrangement first");
+    for (const step of studio.arrangement) {
+      const s = studio.scenes.find((s) => s.id === step.scene);
+      if (s?.midi.clockSource === "host" && s.midi.clockMode === "SYNC")
+        throw new Error(
+          "Use INTERNAL clock in song scenes before rendering. External-host export is not implemented.",
+        );
+    }
+    await this.app.ready();
+    const globals = this.app.midi.getGlobals(),
+      maxTail = studio.scenes.reduce((max, s) => {
+        const fx = s.fx,
+          g = s.globals;
+        const delay = g.delayOn
+          ? fx.delayTime *
+            (fx.delayFeedback > 0
+              ? Math.ceil(Math.log(0.0001) / Math.log(fx.delayFeedback))
+              : 1)
+          : 0;
+        return Math.max(max, delay, g.reverbOn ? 2.2 : 0, fx.stutter ? 2 : 0);
+      }, 0.15);
+    const seconds = songSeconds(studio) + maxTail + 0.2,
+      budget = 512 * 1024 * 1024;
+    if (seconds * engine.context.sampleRate * 8 > budget)
+      throw new Error(
+        "Song export exceeds the 512 MiB capture budget. Export shorter arrangements.",
+      );
+    this.exportPreparing = true;
+    try {
+      this.exportRestore = await captureProject(
+        this.app.midi.store.state,
+        globals,
+      );
+    } finally {
+      this.exportPreparing = false;
+    }
+    this.exporting = true;
+    const token = ++this.exportToken;
+    document.body.classList.add("exporting");
+    this.status(
+      "RENDERING COMPLETE SONG IN REAL TIME · keep tab foreground; CANCEL restores the original session",
+    );
+    try {
+      await this.song.stop();
+      audioInput.monitoring(false);
+      await new Promise((r) => setTimeout(r, 20));
+      if (token !== this.exportToken || !this.exporting) return;
+      engine.clearTails();
+      this.recorder.maxFrames = budget / 8;
+      this.recorder.overflow = () =>
+        void this.cancelExport(
+          "Export exceeded memory budget; no truncated WAV was saved.",
+        );
+      await this.recorder.start(engine.output);
+      if (token !== this.exportToken || !this.exporting) {
+        await this.recorder.stop();
+        return;
+      }
+      await this.song.play(() => {
+        void this.safe(async () => {
+          studio.automation.enabled = false;
+          const end = engine.context.currentTime + maxTail;
+          while (engine.context.currentTime < end) {
+            if (!this.exporting || token !== this.exportToken) return;
+            await new Promise((r) => setTimeout(r, 30));
+          }
+          if (token !== this.exportToken) return;
+          const started = this.song.started,
+            recordStart = this.recorder.captureStarted,
+            buffer = await this.recorder.stop();
+          if (!buffer) throw new Error("No export audio captured");
+          const from = Math.max(
+              0,
+              Math.round((started - recordStart) * buffer.sampleRate),
+            ),
+            trimmed = engine.context.createBuffer(
+              2,
+              Math.max(1, buffer.length - from),
+              buffer.sampleRate,
+            );
+          for (let c = 0; c < 2; c++) {
+            const data = trimmed.getChannelData(c);
+            data.set(buffer.getChannelData(c).subarray(from));
+            const fade = Math.min(
+              data.length,
+              Math.floor(buffer.sampleRate * 0.02),
+            );
+            for (let i = 0; i < fade; i++)
+              data[data.length - fade + i] *= 1 - i / fade;
+          }
+          downloadWav(trimmed, "GMC-9000-song");
+          await this.restoreAfterExport();
+          this.status(
+            "Complete stereo song WAV exported with samples, worklet DSP, effects, automation and transitions. Original session restored.",
+          );
+        });
+      });
+    } catch (e) {
+      await this.cancelExport();
+      throw e;
+    }
   }
-  async cancelExport() {
+  private async restoreAfterExport() {
+    const saved = this.exportRestore;
+    try {
+      if (saved) await this.app.midi.load(saved);
+      this.exportRestore = null;
+    } finally {
+      this.exporting = false;
+      document.body.classList.remove("exporting");
+    }
+  }
+  async cancelExport(message = "Export cancelled; original session restored.") {
+    if (!this.exporting) return;
+    ++this.exportToken;
     if (this.recorder.recording) await this.recorder.stop();
-    this.exporting = false;
     await this.song.stop();
+    await this.restoreAfterExport();
+    this.status(message);
   }
   private installHoldAndDrop() {
     document.querySelectorAll<HTMLElement>("[data-trigger]").forEach((el) => {
@@ -497,26 +708,35 @@ export class StudioUI {
             return;
           }
           const hold = { released: false, pad: id, starting: true };
+          this.inputOwned = true;
           this.held.set(e.pointerId, hold);
           this.suppress.set(id, performance.now() + 60000);
           this.app.select(id);
           void this.safe(async () => {
-            await this.app.ready();
-            if (!audioInput.source)
-              await audioInput.connect(this.input("audio-input").value);
-            if (hold.released) {
-              this.held.delete(e.pointerId);
-              this.suppress.set(id, performance.now() + 400);
-              return;
-            }
             try {
-              await audioInput.start();
-            } finally {
-              hold.starting = false;
-            }
+              await this.app.ready();
+              if (!audioInput.source)
+                await audioInput.connect(this.input("audio-input").value);
+              if (hold.released) {
+                this.inputOwned = false;
+                this.held.delete(e.pointerId);
+                this.suppress.set(id, performance.now() + 400);
+                return;
+              }
+              try {
+                await audioInput.start();
+              } finally {
+                hold.starting = false;
+              }
 
-            this.status(`RECORDING PAD ${id + 1} · RELEASE TO FINISH`);
-            if (hold.released) await this.endHold(e.pointerId);
+              this.status(`RECORDING PAD ${id + 1} · RELEASE TO FINISH`);
+              if (hold.released) await this.endHold(e.pointerId);
+            } catch (e) {
+              this.held.clear();
+              this.inputOwned = false;
+              this.suppress.set(id, performance.now() + 400);
+              throw e;
+            }
           });
         },
         true,
@@ -555,7 +775,23 @@ export class StudioUI {
       };
     });
   }
+  async finishHeld() {
+    for (const [id, hold] of this.held) {
+      hold.released = true;
+      if (!hold.starting) await this.endHold(id);
+    }
+    if (this.heldEnding) await this.heldEnding;
+  }
   private async endHold(pointer: number) {
+    if (this.heldEnding) return this.heldEnding;
+    this.heldEnding = this.completeHold(pointer);
+    try {
+      await this.heldEnding;
+    } finally {
+      this.heldEnding = null;
+    }
+  }
+  private async completeHold(pointer: number) {
     const hold = this.held.get(pointer);
     if (!hold || hold.starting) return;
     this.held.delete(pointer);
@@ -576,5 +812,6 @@ export class StudioUI {
     }
     this.held.delete(pointer);
     this.suppress.set(hold.pad, performance.now() + 400);
+    this.inputOwned = false;
   }
 }

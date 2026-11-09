@@ -10,7 +10,9 @@
     "preview": "vite preview --host 0.0.0.0",
     "test:browser": "node tests/browser.mjs",
     "test:io": "node tests/io-browser.mjs",
-    "test:editor": "node tests/editor-browser.mjs"
+    "test:editor": "node tests/editor-browser.mjs",
+    "test:v2": "node tests/v2-sampling.mjs && node tests/v2-song.mjs && node tests/v2-project-export.mjs && node tests/v2-offline.mjs",
+    "test:all": "npm test && npm run test:browser && npm run test:io && npm run test:editor && npm run test:v2"
   },
   "devDependencies": {
     "playwright": "^1.56.1",

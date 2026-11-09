@@ -29,7 +29,10 @@ const b = await chromium.launch({
     "--use-file-for-fake-audio-capture=/tmp/v2-input.wav",
   ],
 });
-const p = await b.newPage({ viewport: { width: 1400, height: 1000 } }),
+const p = await b.newPage({
+    viewport: { width: 1400, height: 1000 },
+    hasTouch: true,
+  }),
   passed = [],
   errors = [];
 p.on("pageerror", (e) => errors.push(String(e)));
@@ -82,6 +85,54 @@ try {
         window.pads[8].name === "Recording 9" &&
         window.pads[8].buffer.getChannelData(0).some((x) => Math.abs(x) > 0.01),
     ),
+  );
+  await p.evaluate(() => {
+    window.recorded = window.pads[8].buffer;
+  });
+  await p.click("#overdub");
+  await p.waitForFunction(() =>
+    document.querySelector("#rec").classList.contains("recording"),
+  );
+  await p.waitForTimeout(180);
+  await p.click("#overdub");
+  await p.waitForFunction(() => window.pads[8].name === "Overdub 9");
+  check(
+    "Audio overdub mixes input with sample and remains undoable",
+    await p.evaluate(() => {
+      const mixed = window.pads[8].buffer;
+      document.querySelector("#undo").click();
+      return (
+        mixed !== window.recorded &&
+        mixed.duration >= window.recorded.duration &&
+        window.pads[8].buffer === window.recorded
+      );
+    }),
+  );
+  check(
+    "Audio duplication and swapping retain permanent pad numbers",
+    await p.evaluate(() => {
+      window.v2.clipboard = { ...window.pads[8] };
+      document.querySelector("#v2-other").value = "6";
+      document.querySelector("#v2-duplicate").click();
+      const b = window.pads[6].buffer;
+      document.querySelector("#v2-other").value = "5";
+      window.app.select(6);
+      document.querySelector("#v2-swap").click();
+      return (
+        b === window.recorded &&
+        window.pads[5].buffer === b &&
+        window.pads[5].id === 5 &&
+        window.pads[6].id === 6
+      );
+    }),
+  );
+  check(
+    "Crossfade makes loop boundary continuous",
+    await p.evaluate(() => {
+      const region = window.region({ ...window.pads[0], crossfade: 0.005 });
+      const d = region.getChannelData(0);
+      return Math.abs(d[0] - d[d.length - 1]) < 1e-7;
+    }),
   );
   check(
     "Granular pitch/stretch and fades preserve original audio",
@@ -145,7 +196,11 @@ try {
       p.armed = false;
       await e.trigger(0);
       await new Promise((r) => setTimeout(r, 260));
-      return e.phase(0).audible && e.voices.some((v) => v.owner === "seq");
+      return (
+        e.phase(0).audible &&
+        e.voices.filter((v) => v.owner === "seq" && v.pad === 0).length === 1 &&
+        e.voices.some((v) => v.source.loop)
+      );
     }),
   );
   check(
@@ -213,6 +268,60 @@ try {
       window.v2.fx("resonance", 4);
       return window.engine.drive.curve && window.engine.filter.Q.value >= 0.7;
     }),
+  );
+  await p.evaluate(async () => {
+    await window.engine.stop();
+    window.app.select(7);
+  });
+  const touchTarget = await p.locator('[data-trigger="7"]').boundingBox();
+  await p.touchscreen.tap(
+    touchTarget.x + touchTarget.width / 2,
+    touchTarget.y + touchTarget.height / 2,
+  );
+  await p.waitForFunction(() => window.engine.voices.some((v) => v.pad === 7));
+  check("Actual touch input triggers an audible sampled voice", true);
+  await p.evaluate(() => {
+    window.app.select(0);
+    window.v2.open("EDIT");
+  });
+  const touchWave = await p.locator("#v2-wave").boundingBox();
+  await p.touchscreen.tap(
+    touchWave.x + touchWave.width * 0.2,
+    touchWave.y + 60,
+  );
+  check(
+    "Actual touch edits waveform marker",
+    await p.evaluate(() => window.pads[0].start > 0.15),
+  );
+  await p.click("#v2-close");
+  await p.evaluate(async () => {
+    const r = (p) =>
+      performance
+        .getEntriesByType("resource")
+        .find((e) => new URL(e.name).pathname === p).name;
+    const { audioInput } = await import(r("/src/audio/input.ts"));
+    audioInput.disconnect();
+    navigator.mediaDevices.getUserMedia = async () => {
+      throw new DOMException("Denied", "NotAllowedError");
+    };
+    window.app.select(4);
+    document.querySelector("#clear").click();
+  });
+  await p.locator('[data-trigger="4"]').hover();
+  await p.mouse.down();
+  await p.waitForFunction(
+    () =>
+      !window.v2.inputOwned &&
+      document
+        .querySelector("#status")
+        .textContent.includes("permission denied"),
+  );
+  await p.mouse.up();
+  check(
+    "Permission denial preserves pad and resets capture state",
+    await p.evaluate(
+      () => window.pads[4].buffer === null && !window.v2.inputOwned,
+    ),
   );
   check("No browser errors", errors.length === 0);
   await fs.writeFile(

@@ -1,4 +1,5 @@
-import { modeOf, studio } from "./v2/model";
+import { preparedRegion } from "./audio/region";
+import { modeOf, studio, padDefaults } from "./v2/model";
 import { StudioUI } from "./v2/ui";
 import { installViewportFit } from "./viewport";
 import { MidiEditor } from "./midi-editor";
@@ -30,9 +31,8 @@ const $ = <T extends HTMLElement = HTMLElement>(q: string) =>
   document.querySelector<T>(q)!;
 loadDemoSamples();
 document.querySelector("#app")!.innerHTML = hardwareMarkup();
-$("#stretch").setAttribute("disabled", "");
-$("#stretch").closest("label")!.title =
-  "Pitch-preserving time stretch is not implemented";
+
+$("#stretch").closest("label")!.title = "Non-destructive granular time stretch";
 $("#rec").title = "Record connected audio input into selected pad";
 function message(s: string) {
   $("#status").textContent = s;
@@ -62,8 +62,8 @@ function render() {
   $("#loop").textContent = modeOf(p);
   $<HTMLInputElement>("#play-count").value = String(p.play);
   $<HTMLInputElement>("#rest-count").value = String(p.rest);
-  for (const key of ["start", "end", "speed"] as const) {
-    $<HTMLInputElement>("#" + key).value = String(p[key]);
+  for (const key of ["start", "end", "speed", "stretch"] as const) {
+    $<HTMLInputElement>("#" + key).value = String(p[key] ?? 1);
     updateKnob(key);
   }
   $<HTMLInputElement>("#pad-level").value = String(p.level);
@@ -98,7 +98,7 @@ function updateKnob(id: string) {
       ? `${(Number(input.value) / 1000).toFixed(1)}k`
       : id === "bits"
         ? input.value
-        : id === "speed"
+        : id === "speed" || id === "stretch"
           ? `${Number(input.value).toFixed(2)}×`
           : id === "start" || id === "end"
             ? `${Math.round(Number(input.value) * 100)}%`
@@ -265,6 +265,7 @@ $("#loop").onclick = () => {
     modes = ["ONE SHOT", "LOOP", "CYCLE"] as const;
   p.mode = modes[(modes.indexOf(modeOf(p)) + 1) % 3];
   p.loop = p.mode !== "ONE SHOT";
+  if (p.mode === "LOOP" && p.crossfade === undefined) p.crossfade = 0.005;
   if (!p.loop) {
     engine.cancel(selected);
     p.armed = false;
@@ -272,7 +273,7 @@ $("#loop").onclick = () => {
   engine.changed(selected);
   render();
 };
-for (const key of ["start", "end", "speed"] as const) {
+for (const key of ["start", "end", "speed", "stretch"] as const) {
   $("#" + key).onpointerdown = () => checkpoint();
   $("#" + key).oninput = () => {
     const p = pads[selected],
@@ -299,26 +300,44 @@ $("#f1").onclick = () => {
   message(pads[selected].reverse ? "REVERSE ON" : "REVERSE OFF");
 };
 $("#f2").onclick = () => $<HTMLInputElement>("#speed").focus();
-$("#f3").onclick = () => message("T-STR · RESERVED / NOT IMPLEMENTED");
+$("#f3").onclick = () => {
+  $<HTMLInputElement>("#stretch").focus();
+  message("GRANULAR STRETCH · EDIT FOR PITCH / FADES");
+};
 $("#f4").onclick = () => $<HTMLInputElement>("#sr").focus();
 $("#f5").onclick = () => $<HTMLInputElement>("#delay").focus();
+async function playTransport() {
+  if (v2UI?.song.playing) {
+    if (v2UI.song.paused) await v2UI.song.pause();
+    return;
+  }
+  await midiEditor!.play();
+}
+async function pauseTransport() {
+  if (v2UI?.song.playing) {
+    await v2UI.song.pause();
+    return;
+  }
+  if (engine.status === "paused") await midiEditor!.play();
+  else await midiEditor!.pause();
+}
+async function stopTransport() {
+  if (v2UI?.song.playing || v2UI?.song.pending) await v2UI.song.stop();
+  else await midiEditor!.stop();
+}
 $("#play").onclick = () =>
   safely(async () => {
     await ready();
-    await midiEditor!.play();
-    message(
-      pads.some((p) => p.buffer) ? "TRANSPORT · PLAY" : "LOAD A WAV TO BEGIN",
-    );
+    await playTransport();
+    message("TRANSPORT · PLAY");
   });
-$("#pause").onclick = () =>
-  safely(async () => {
-    if (engine.status === "paused") await midiEditor!.play();
-    else await midiEditor!.pause();
-  });
+$("#pause").onclick = () => safely(() => pauseTransport());
 $("#stop").onclick = () =>
   safely(async () => {
-    await finishRecording();
-    await midiEditor!.stop();
+    if (v2UI?.inputOwned) await v2UI.finishHeld();
+    else await finishRecording();
+    if (v2UI?.resampling) await v2UI.finishResample();
+    await stopTransport();
     message("STOP · ALL CYCLES RESET");
   });
 $("#master").oninput = () =>
@@ -335,7 +354,7 @@ for (const id of ["sr", "bits"])
 for (const [id, rate, depth] of [
   ["era80", 26000, 12],
   ["era90", 44100, 16],
-  ["era00", 44100, 16],
+  ["era00", 48000, 24],
 ] as const) {
   $("#" + id).onclick = () => {
     sr = rate;
@@ -380,7 +399,7 @@ $("#paste").onclick = () => {
   if (!clipboard) return message("COPY PAD SETTINGS FIRST");
   checkpoint();
   const { id, name, ...s } = clipboard;
-  Object.assign(pads[selected], s);
+  Object.assign(pads[selected], padDefaults, s, { mode: modeOf(clipboard) });
   engine.changed(selected);
   render();
   message("PAD SETTINGS PASTED");
@@ -410,7 +429,13 @@ $("#clear").onclick = () => {
   render();
   message("PAD AUDIO CLEARED · CANNOT UNDO AUDIO REMOVAL");
 };
-$("#save").onclick = () => {
+$("#save").title =
+  "Save complete project + audio. Shift-click exports legacy settings.";
+$("#save").onclick = (event) => {
+  if (!event.shiftKey) {
+    safely(() => midiEditor!.exportProject());
+    return;
+  }
   const blob = new Blob(
     [
       JSON.stringify(
@@ -459,6 +484,7 @@ $("#data-wheel").onwheel = (e) => {
 };
 window.addEventListener("keydown", (e) => {
   if (
+    v2UI?.exporting ||
     e.repeat ||
     e.ctrlKey ||
     e.altKey ||
@@ -491,8 +517,8 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     safely(async () => {
       await ready();
-      if (engine.status === "playing") await midiEditor!.pause();
-      else await midiEditor!.play();
+      if (engine.status === "playing") await pauseTransport();
+      else await playTransport();
     });
   }
 });
@@ -542,9 +568,9 @@ for (const id of [
 render();
 // Explicit adapter surface; no DS-9 connection or synchronization is implemented.
 export const transport = {
-  play: () => midiEditor!.play(),
-  pause: () => midiEditor!.pause(),
-  stop: () => midiEditor!.stop(),
+  play: () => playTransport(),
+  pause: () => pauseTransport(),
+  stop: () => stopTransport(),
   trigger: (pad: number) => {
     if (!Number.isInteger(pad) || pad < 0 || pad > 8)
       throw new RangeError("Pad must be 0–8");
@@ -555,6 +581,7 @@ export const transport = {
 // Hardware I/O is opt-in; no microphone or MIDI permissions on page load.
 let recordPad = 0,
   recordBusy = false;
+let overdubSource: Pad | null = null;
 function ioMessage(text: string) {
   $("#io-status").textContent = text;
   message(text);
@@ -632,16 +659,68 @@ async function finishRecording() {
   if (!audioInput.recording || recordBusy) return;
   recordBusy = true;
   try {
-    const buffer = await audioInput.stop();
+    let buffer = await audioInput.stop();
+    if (buffer && overdubSource?.buffer) {
+      const old = overdubSource,
+        original = preparedRegion({
+          ...old,
+          fadeIn: Math.max(old.fadeIn ?? 0, 1 / old.buffer!.sampleRate),
+        })!;
+      const c = new OfflineAudioContext(
+        2,
+        Math.ceil(
+          Math.max(
+            buffer.duration,
+            ((old.end - old.start) *
+              old.buffer!.duration *
+              (old.stretch ?? 1)) /
+              old.speed,
+          ) * buffer.sampleRate,
+        ),
+        buffer.sampleRate,
+      );
+      const source = c.createBufferSource();
+      source.buffer = original;
+      source.playbackRate.value = old.speed;
+      source.connect(c.destination);
+      source.start(
+        0,
+        original === old.buffer
+          ? (old.reverse ? 1 - old.end : old.start) * old.buffer!.duration
+          : 0,
+        original === old.buffer
+          ? (old.end - old.start) * old.buffer!.duration
+          : original.duration,
+      );
+      const mic = c.createBufferSource();
+      mic.buffer = buffer;
+      mic.connect(c.destination);
+      mic.start();
+      buffer = await c.startRendering();
+    }
+    const wasOverdub = !!overdubSource;
+    overdubSource = null;
     if (buffer) {
       checkpoint();
       engine.cancel(recordPad);
       Object.assign(pads[recordPad], {
         buffer,
-        name: `Recording ${recordPad + 1}`,
+        name: wasOverdub
+          ? `Overdub ${recordPad + 1}`
+          : `Recording ${recordPad + 1}`,
         start: 0,
         end: 1,
         armed: false,
+        ...(wasOverdub
+          ? {
+              pitch: 0,
+              stretch: 1,
+              reverse: false,
+              fadeIn: 0,
+              fadeOut: 0,
+              crossfade: 0,
+            }
+          : {}),
       });
       render();
       ioMessage(
@@ -655,6 +734,10 @@ async function finishRecording() {
 }
 $("#rec").onclick = () =>
   safely(async () => {
+    if (v2UI?.inputOwned) {
+      await v2UI.finishHeld();
+      return;
+    }
     if (recordBusy) return;
     if (audioInput.recording) {
       await finishRecording();
@@ -663,21 +746,39 @@ $("#rec").onclick = () =>
     recordBusy = true;
     try {
       await ready();
-      await midiEditor!.stop();
+      await stopTransport();
       recordPad = selected;
       if (!audioInput.source)
         await audioInput.connect($<HTMLSelectElement>("#audio-input").value);
       await audioInput.start();
+      if (overdubSource) await engine.trigger(recordPad, true);
       $("#rec").classList.add("recording");
       ioMessage(
         `RECORDING INPUT TO PAD ${recordPad + 1} · REC / STOP TO FINISH`,
       );
+    } catch (error) {
+      overdubSource = null;
+      throw error;
     } finally {
       recordBusy = false;
     }
   });
+$("#overdub").onclick = () => {
+  if (audioInput.recording) {
+    $("#rec").click();
+    return;
+  }
+  const p = pads[selected];
+  if (!p.buffer) {
+    message("Load or record a sample before overdubbing");
+    return;
+  }
+  overdubSource = { ...p };
+  $("#rec").click();
+};
 const midi = new MidiLearn(
   (target, value, trigger, info) => {
+    if (v2UI?.exporting) return;
     safely(async () => {
       if (target.startsWith("pad:")) {
         if (info?.release) {
@@ -753,7 +854,11 @@ window.addEventListener("pagehide", () => {
 midiEditor = new MidiEditor({
   ready,
   render,
-  canLoad: () => !audioInput.recording && !recordBusy,
+  canLoad: (): boolean =>
+    !audioInput.recording &&
+    !recordBusy &&
+    !v2UI?.resampling &&
+    !v2UI?.inputOwned,
   globals: () => ({
     sr,
     bits,
@@ -801,4 +906,16 @@ export const appUI = {
   finishRecording,
   midi: midiEditor,
 };
-export const v2UI = new StudioUI(appUI);
+export const v2UI: StudioUI = new StudioUI(appUI);
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js`, {
+        scope: import.meta.env.BASE_URL,
+      })
+      .catch(() =>
+        message("Offline cache unavailable; export a project for backup."),
+      );
+  });
+}

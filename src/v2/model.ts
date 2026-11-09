@@ -17,6 +17,7 @@ export const padDefaults = {
 export interface FXState {
   characterAmount: number;
   characterBypass: boolean;
+  filterBypass?: boolean;
   bandwidth: number;
   saturation: number;
   filter: number;
@@ -31,6 +32,7 @@ export interface FXState {
 export const defaultFX = (): FXState => ({
   characterAmount: 1,
   characterBypass: false,
+  filterBypass: false,
   bandwidth: 22000,
   saturation: 0,
   filter: 22000,
@@ -66,6 +68,7 @@ export interface Scene {
   transition: "immediate" | "bar" | "cycle" | "fade";
   fade: number;
   continueLoops: boolean;
+  active?: number[];
 }
 export interface SongStep {
   id: string;

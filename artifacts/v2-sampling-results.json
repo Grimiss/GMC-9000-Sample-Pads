@@ -2,6 +2,9 @@
   "passed": [
     "Clear has safe audio undo",
     "Hold empty pad records and assigns on release",
+    "Audio overdub mixes input with sample and remains undoable",
+    "Audio duplication and swapping retain permanent pad numbers",
+    "Crossfade makes loop boundary continuous",
     "Granular pitch/stretch and fades preserve original audio",
     "Waveform drag trims audible start",
     "Trim undo restores original region",
@@ -11,6 +14,9 @@
     "Occupied resample destinations are protected",
     "Resampler nodes disconnect after capture",
     "Character bypass and resonance are real DSP parameters",
+    "Actual touch input triggers an audible sampled voice",
+    "Actual touch edits waveform marker",
+    "Permission denial preserves pad and resets capture state",
     "No browser errors"
   ],
   "errors": []

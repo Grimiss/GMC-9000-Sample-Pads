@@ -1,3 +1,4 @@
+import { replaceStudio } from "./v2/model";
 import { pads } from "./state";
 import { engine } from "./audio/engine";
 import {
@@ -697,7 +698,8 @@ export class MidiEditor {
       if (p?.format === "GRIMISS-GMC-9000") {
         const staged = await stageProject(raw, engine.context);
         await this.stop();
-        staged.pads.forEach((p, i) => Object.assign(pads[i], p));
+        staged.pads.forEach((p, i) => (pads[i] = { ...p }));
+        replaceStudio(staged.studio);
         this.callbacks.applyGlobals(staged.globals);
         this.store.restore(staged.midi);
       } else {
@@ -706,6 +708,7 @@ export class MidiEditor {
         legacy.pads.forEach((p, i) => Object.assign(pads[i], p));
         this.callbacks.applyGlobals(legacy.globals);
       }
+      document.dispatchEvent(new Event("gmc-project-loaded"));
       this.callbacks.render();
       this.refresh();
       this.recoveryPending = false;

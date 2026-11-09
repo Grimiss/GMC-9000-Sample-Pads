@@ -15,6 +15,8 @@ class GMCCrusher extends AudioWorkletProcessor {
     this.write = 0;
     this.read = 0;
     this.freeze = 0;
+    this.filled = 0;
+    this.pendingStutter = false;
     this.queue = [];
     this.port.onmessage = ({ data }) => {
       if (!data.when) this.apply(data);
@@ -22,6 +24,18 @@ class GMCCrusher extends AudioWorkletProcessor {
     };
   }
   apply(d) {
+    if (d.clear) {
+      this.ring.forEach((r) => r.fill(0));
+      this.queue = [];
+      this.held = [];
+      this.write = 0;
+      this.read = 0;
+      this.freeze = 0;
+      this.phase = 1;
+      this.stutter = false;
+      this.filled = 0;
+      this.pendingStutter = false;
+    }
     if (d.rate !== undefined)
       this.rate = Math.max(1000, Math.min(sampleRate, d.rate));
     if (d.bits !== undefined) this.bits = Math.max(4, Math.min(24, d.bits));
@@ -31,10 +45,16 @@ class GMCCrusher extends AudioWorkletProcessor {
       this.stutterSeconds = Math.max(0.02, Math.min(1, d.stutterSeconds));
     if (d.stutter !== undefined) {
       if (d.stutter && !this.stutter) {
-        this.freeze = this.write;
-        this.read = 0;
+        if (this.filled >= Math.floor(this.stutterSeconds * sampleRate)) {
+          this.freeze = this.write;
+          this.read = 0;
+          this.stutter = true;
+        } else this.pendingStutter = true;
       }
-      this.stutter = d.stutter;
+      if (!d.stutter) {
+        this.stutter = false;
+        this.pendingStutter = false;
+      }
     }
   }
   process(inputs, outputs) {
@@ -73,8 +93,16 @@ class GMCCrusher extends AudioWorkletProcessor {
         }
         output[ch][i] = sample;
       }
-      if (!this.stutter) this.write = (this.write + 1) % length;
-      else this.read = (this.read + 1) % loop;
+      if (!this.stutter) {
+        this.write = (this.write + 1) % length;
+        this.filled = Math.min(length, this.filled + 1);
+        if (this.pendingStutter && this.filled >= loop) {
+          this.pendingStutter = false;
+          this.stutter = true;
+          this.freeze = this.write;
+          this.read = 0;
+        }
+      } else this.read = (this.read + 1) % loop;
     }
     return true;
   }

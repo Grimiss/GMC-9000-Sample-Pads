@@ -1,0 +1,27 @@
+{
+  "passed": [
+    "V2 project retains scene audio even after current assignment changes",
+    "V1 project migration preserves CYCLE and local beat timing",
+    "Invalid scene/automation rejects without mutating current state",
+    "Full song export produces a real stereo Float32 WAV",
+    "Export includes complete arrangement plus reverb tail",
+    "Rendered samples, loops and effects have nonzero stereo output",
+    "Export restores original pads, scenes and capture resources",
+    "Cancel export releases recorder and restores complete session",
+    "Repeated start/stop cleans source voices",
+    "80s profile establishes bandwidth, saturation and 12-bit defaults",
+    "90s profile is 16-bit with subtle coloration",
+    "00s profile supports clean native-rate 24-bit playback",
+    "No browser runtime errors"
+  ],
+  "errors": [],
+  "wav": {
+    "duration": 2.828956916099773,
+    "energy": [
+      387.23946421688214,
+      586.586747163905
+    ],
+    "peak": 0.37600773572921753,
+    "bytes": 998100
+  }
+}

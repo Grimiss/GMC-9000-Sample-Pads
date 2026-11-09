@@ -77,6 +77,20 @@ try {
     "Scene recall can retain loop phase",
     await page.evaluate(() => window.engine.origins.get(0) === window.origin),
   );
+  check(
+    "Scene capture and recall retain active one-shot samples",
+    await page.evaluate(async () => {
+      window.pads[1].mode = "ONE SHOT";
+      await window.engine.trigger(1, true);
+      const s = window.v2.song.capture();
+      window.engine.cancel(1);
+      window.v2.song.apply(s);
+      return (
+        s.active.includes(1) &&
+        window.engine.voices.some((v) => v.pad === 1 && v.owner === "scene")
+      );
+    }),
+  );
   await page.evaluate(() => {
     const s = window.model.studio;
     window.v2.song.automationRecording = true;
@@ -157,11 +171,53 @@ try {
     "Scene level and crossfade settings applied",
     await page.evaluate(() => window.pads[0].level === 0.3),
   );
+  await page.evaluate(() => window.v2.song.play());
+  await page.waitForTimeout(60);
+  await page.click("#stop");
+  await page.waitForTimeout(400);
+  check(
+    "Hardware STOP prevents song scheduler restarting playback",
+    await page.evaluate(
+      () =>
+        !window.v2.song.playing &&
+        window.engine.status === "stopped" &&
+        window.engine.voices.length === 0,
+    ),
+  );
   await page.evaluate(() => {
     window.v2.open("SONG");
     window.v2.song.refresh();
   });
   await page.screenshot({ path: "artifacts/V2-song.png" });
+  await page.click("#v2-effects");
+  await page.click("#fx-auto-rec");
+  await page.waitForFunction(() => window.v2.song.automationRecording);
+  await page.locator("#fx-delay-wet").evaluate((el) => {
+    el.value = ".37";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.check("#fx-filterBypass");
+  check(
+    "Context FX wet and bypass controls apply and record automation",
+    await page.evaluate(
+      () =>
+        window.app.midi.getGlobals().delayAmount === 0.37 &&
+        window.model.studio.fx.filterBypass &&
+        window.model.studio.automation.events.some(
+          (e) => e.parameter === "global.delayAmount",
+        ),
+    ),
+  );
+  await page.click("#fx-auto-rec");
+  await page.click("#fx-auto-stop");
+  check(
+    "Context FX automation stops cleanly",
+    await page.evaluate(
+      () =>
+        !window.v2.song.automationRecording &&
+        !window.model.studio.automation.enabled,
+    ),
+  );
   check("No runtime errors", errors.length === 0);
   await fs.writeFile(
     "artifacts/v2-song-results.json",
