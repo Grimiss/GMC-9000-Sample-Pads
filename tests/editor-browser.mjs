@@ -107,6 +107,8 @@ try {
   await page.click("#stop");
   await page.click("#midi-edit");
   await page.click("#clip-new");
+  await page.selectOption("#clip-units", "beats");
+  await page.selectOption("#clip-quantize", "1/16");
   await page.fill("#clip-length", "4");
   await page.locator("#clip-length").dispatchEvent("change");
   const canvas = page.locator("#lane-canvas");
@@ -186,6 +188,7 @@ try {
   });
   await page.screenshot({ path: "artifacts/MIDI-editor.png" });
   await page.selectOption("#clip-clock", "SYNC");
+  await page.selectOption("#clip-source", "host");
   await page.click("#clip-play");
   await page.waitForTimeout(40);
   check(
@@ -200,6 +203,8 @@ try {
   );
   await page.click("#clip-stop");
   await page.selectOption("#clip-clock", "FREE");
+  await page.selectOption("#clip-units", "beats");
+  await page.selectOption("#clip-source", "internal");
   // Verify independent MIDI ownership and intentional overlap with existing sequencer.
   await page.evaluate(() => {
     window.session.store.clip.events = [
@@ -300,7 +305,7 @@ try {
         window.session.store.clip.length === 4 &&
         window.session.store.state.bpm === 137 &&
         window.session.store.state.playbackMode === "BOTH" &&
-        window.session.store.state.clockMode === "FREE",
+        window.session.store.state.clockMode === "SYNC",
     ),
   );
   check(

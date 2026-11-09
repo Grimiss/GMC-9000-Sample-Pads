@@ -1,0 +1,16 @@
+{
+  "passed": [
+    "New patterns are seconds-based and unquantized",
+    "Pattern duplication retains separate identities",
+    "SYNC internal clock runs without a host",
+    "Scene capture does not interrupt the current loop",
+    "Scene recall can retain loop phase",
+    "Effect movements record independently of sample audio",
+    "Automation playback reaches actual filter parameter",
+    "Song pause freezes audio and arrangement clock",
+    "Song repeats and advances through all scenes then stops",
+    "Scene level and crossfade settings applied",
+    "No runtime errors"
+  ],
+  "errors": []
+}

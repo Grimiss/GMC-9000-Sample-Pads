@@ -37,7 +37,7 @@ export class MidiEditor {
     ready: () => Promise<void>;
     render: () => void;
     globals: () => GlobalSettings;
-    applyGlobals: (g: GlobalSettings) => void;
+    applyGlobals: (g: GlobalSettings, when?: number) => void;
     canLoad: () => boolean;
   };
   constructor(callbacks: MidiEditor["callbacks"]) {
@@ -64,7 +64,7 @@ export class MidiEditor {
     document.querySelector("#app")!.append(controls);
     this.dialog = document.createElement("dialog");
     this.dialog.id = "midi-editor";
-    this.dialog.innerHTML = `<h2>GMC-9000 · SAMPLE LANES</h2><div class="editor-controls"><button id="clip-play">PLAY</button><button id="clip-pause">PAUSE</button><button id="clip-stop">STOP</button><label>CLIP <select id="clip-select"></select></label><button id="clip-new">NEW CLIP</button><label>NAME <input id="clip-name" maxlength="80"></label><label>LENGTH (BEATS) <input id="clip-length" type="number" min=".125" max="4096" step=".125" value="16"></label><label>LOCAL BPM <input id="clip-bpm" type="number" min="20" max="400" value="120"></label><label>CLOCK <select id="clip-clock"><option>FREE</option><option>SYNC</option></select></label><label>QUANTIZE <select id="clip-quantize"><option>OFF</option><option>1/4</option><option>1/8</option><option selected>1/16</option><option>1/32</option></select></label><label>TAKE <select id="clip-take"><option value="overdub">OVERDUB</option><option value="replace">REPLACE CLIP</option></select></label><button id="editor-rec">MIDI REC</button><button id="clip-undo">UNDO</button><button id="clip-redo">REDO</button></div><p>Paint: drag empty grid · Erase: Ctrl-drag · Move: drag a trigger · Select a trigger for precise timing and velocity. Labels always follow current pad assignments. Note duration is retained as metadata; playback is one-shot.</p><div class="lane-scroll"><canvas id="lane-canvas" width="1200" height="590" aria-label="Nine named sample lanes. Use event list and timing fields for keyboard editing."></canvas></div><div class="editor-controls"><label>EVENT <select id="event-select"><option value="">Select trigger</option></select></label><label>PAD <select id="event-lane">${[6, 7, 8, 3, 4, 5, 0, 1, 2].map((i) => `<option value="${i}">PAD ${i + 1}</option>`).join("")}</select></label><label>BEAT (0-BASED) <input type="number" id="event-beat" min="0" step=".001"></label><label>VELOCITY <input type="range" id="event-velocity" min=".01" max="1" step=".01"></label><button id="event-add">ADD TRIGGER</button><button id="event-delete">DELETE</button><button id="clip-requantize">QUANTIZE ORIGINAL TIMING</button><span id="event-duration"></span></div><div class="editor-controls"><button id="project-export">EXPORT PROJECT + AUDIO</button><button id="project-load">LOAD PROJECT / LEGACY SETTINGS</button><button id="project-recover">RECOVER AUTOSAVE</button><button id="project-previous">RECOVER PREVIOUS</button><button id="project-use-current">KEEP CURRENT / ENABLE AUTOSAVE</button><button id="editor-close">CLOSE MIDI EDITOR</button><input hidden id="project-file" type="file" accept=".json,.gmc,application/json"></div><p id="project-status" role="status">Checking local recovery…</p>`;
+    this.dialog.innerHTML = `<h2>GMC-9000 · SAMPLE LANES</h2><div class="editor-controls"><button id="clip-play">PLAY</button><button id="clip-pause">PAUSE</button><button id="clip-stop">STOP</button><label>CLIP <select id="clip-select"></select></label><button id="clip-new">NEW CLIP</button><button id="clip-duplicate">DUPLICATE PATTERN</button><label>NAME <input id="clip-name" maxlength="80"></label><label>LENGTH (<span id="length-units">SECONDS</span>) <input id="clip-length" type="number" min=".125" max="4096" step=".125" value="16"></label><label>LOCAL BPM <input id="clip-bpm" type="number" min="20" max="400" value="120"></label><label>CLOCK <select id="clip-clock"><option>FREE</option><option>SYNC</option></select></label><label>UNITS <select id="clip-units"><option value="seconds">SECONDS / FREE</option><option value="beats">BEATS / SYNC</option></select></label><label>CLOCK SOURCE <select id="clip-source"><option value="internal">INTERNAL</option><option value="host">SUPPLIED HOST</option></select></label><label>SWING <input id="clip-swing" type="number" min="0" max=".75" step=".01" value="0"></label><label>QUANTIZE <select id="clip-quantize"><option>OFF</option><option>1/4</option><option>1/8</option><option selected>1/16</option><option>1/32</option></select></label><label>TAKE <select id="clip-take"><option value="overdub">OVERDUB</option><option value="replace">REPLACE CLIP</option></select></label><button id="editor-rec">MIDI REC</button><button id="clip-undo">UNDO</button><button id="clip-redo">REDO</button></div><p>Paint: drag empty grid · Erase: Ctrl-drag · Move: drag a trigger · Select a trigger for precise timing and velocity. Labels always follow current pad assignments. Note duration is retained as metadata; playback is one-shot.</p><div class="lane-scroll"><canvas id="lane-canvas" width="1200" height="590" aria-label="Nine named sample lanes. Use event list and timing fields for keyboard editing."></canvas></div><div class="editor-controls"><label>EVENT <select id="event-select"><option value="">Select trigger</option></select></label><label>PAD <select id="event-lane">${[6, 7, 8, 3, 4, 5, 0, 1, 2].map((i) => `<option value="${i}">PAD ${i + 1}</option>`).join("")}</select></label><label>TIME (<span id="event-time-units">SECONDS</span>, 0-BASED) <input type="number" id="event-beat" min="0" step=".001"></label><label>VELOCITY <input type="range" id="event-velocity" min=".01" max="1" step=".01"></label><button id="event-add">ADD TRIGGER</button><button id="event-delete">DELETE</button><button id="clip-requantize">QUANTIZE ORIGINAL TIMING</button><span id="event-duration"></span></div><div class="editor-controls"><button id="project-export">EXPORT PROJECT + AUDIO</button><button id="project-load">LOAD PROJECT / LEGACY SETTINGS</button><button id="project-recover">RECOVER AUTOSAVE</button><button id="project-previous">RECOVER PREVIOUS</button><button id="project-use-current">KEEP CURRENT / ENABLE AUTOSAVE</button><button id="editor-close">CLOSE MIDI EDITOR</button><input hidden id="project-file" type="file" accept=".json,.gmc,application/json"></div><p id="project-status" role="status">Checking local recovery…</p>`;
     document.body.append(this.dialog);
     this.canvas = this.el("lane-canvas");
     this.status = this.el("project-status");
@@ -99,11 +99,12 @@ export class MidiEditor {
         const c = {
           id: uid(),
           name: `Clip ${this.store.state.clips.length + 1}`,
-          length: 16,
+          length: this.store.state.timeBase === "seconds" ? 8 : 16,
           events: [],
         };
         this.store.state.clips.push(c);
         this.store.state.activeClip = c.id;
+        this.store.state.quantization = "OFF";
       });
     };
     this.input("clip-name").onchange = () =>
@@ -125,13 +126,59 @@ export class MidiEditor {
         );
       else this.refresh();
     };
-    this.input("clip-clock").onchange = () => {
-      const mode = this.input("clip-clock").value as "FREE" | "SYNC";
+    const setTiming = (mode: "FREE" | "SYNC") => {
+      const state = this.store.state,
+        old = state.timeBase ?? "beats",
+        next = mode === "FREE" ? "seconds" : "beats",
+        factor =
+          old === next
+            ? 1
+            : next === "seconds"
+              ? 60 / state.bpm
+              : state.bpm / 60,
+        position = this.timeline.snapshot().beat * factor;
       this.disarm();
-      this.edit(() =>
-        this.timeline.reanchor(() => (this.store.state.clockMode = mode)),
-      );
+      this.edit(() => {
+        for (const c of state.clips) {
+          c.length *= factor;
+          for (const e of c.events) {
+            e.beat *= factor;
+            e.originalBeat *= factor;
+            if (e.duration !== undefined) e.duration *= factor;
+            if (e.originalDuration !== undefined) e.originalDuration *= factor;
+          }
+        }
+        state.timeBase = next;
+        state.clockMode = mode;
+        if (next === "seconds") state.quantization = "OFF";
+        this.timeline.seek(position);
+      });
     };
+    this.input("clip-clock").onchange = () =>
+      setTiming(this.input("clip-clock").value as "FREE" | "SYNC");
+    this.input("clip-units").onchange = () =>
+      setTiming(this.input("clip-units").value === "seconds" ? "FREE" : "SYNC");
+    this.input("clip-source").onchange = () => {
+      const value = this.input("clip-source").value as "internal" | "host";
+      this.edit(() => {
+        this.store.state.clockSource = value;
+        this.timeline.invalidate();
+      });
+    };
+    this.input("clip-swing").onchange = () => {
+      const v = Number(this.input("clip-swing").value);
+      if (v >= 0 && v <= 0.75) this.edit(() => (this.store.state.swing = v));
+      else this.refresh();
+    };
+    this.el("clip-duplicate").onclick = () =>
+      this.edit(() => {
+        const c = structuredClone(this.store.clip);
+        c.id = uid();
+        c.name += " copy";
+        c.events.forEach((e) => (e.id = uid()));
+        this.store.state.clips.push(c);
+        this.store.state.activeClip = c.id;
+      });
     this.input("clip-quantize").onchange = () =>
       this.edit(
         () =>
@@ -270,8 +317,8 @@ export class MidiEditor {
   getGlobals() {
     return this.callbacks.globals();
   }
-  setGlobals(g: GlobalSettings) {
-    this.callbacks.applyGlobals(g);
+  setGlobals(g: GlobalSettings, when?: number) {
+    this.callbacks.applyGlobals(g, when);
     this.changed();
   }
   changed() {
@@ -294,7 +341,11 @@ export class MidiEditor {
       this.store.notify();
       return;
     }
-    if (this.store.state.clockMode === "SYNC" && !this.timeline.host) {
+    if (
+      this.store.state.clockMode === "SYNC" &&
+      this.store.state.clockSource !== "internal" &&
+      !this.timeline.host
+    ) {
       this.status.textContent =
         "SYNC is waiting: connect a host clock, or select FREE.";
       this.dialog.showModal();
@@ -355,7 +406,10 @@ export class MidiEditor {
   }
   private transportStatus() {
     const s = this.timeline.snapshot(),
-      waiting = this.store.state.clockMode === "SYNC" && !s.running;
+      waiting =
+        this.store.state.clockMode === "SYNC" &&
+        this.store.state.clockSource !== "internal" &&
+        !s.running;
     this.el("midi-transport-status").textContent =
       `${this.timeline.armed ? "● MIDI REC ARMED · " : ""}${this.timeline.running ? "MIDI PLAY" : "MIDI STOPPED"} · ${this.store.state.clockMode}${waiting ? " · WAITING FOR HOST" : ""}`;
     for (const id of ["midi-rec", "editor-rec"]) {
@@ -372,6 +426,17 @@ export class MidiEditor {
     this.input("clip-name").value = c.name;
     this.input("clip-length").value = String(c.length);
     this.input("clip-bpm").value = String(s.bpm);
+    this.input("clip-bpm").disabled = s.timeBase === "seconds";
+    this.input("clip-swing").disabled = s.timeBase === "seconds";
+    this.input("clip-quantize").disabled = s.timeBase === "seconds";
+    this.input("clip-units").value = s.timeBase ?? "beats";
+    this.input("clip-source").value =
+      s.clockSource ?? (s.clockMode === "SYNC" ? "host" : "internal");
+    this.input("clip-swing").value = String(s.swing ?? 0);
+    this.el("length-units").textContent =
+      s.timeBase === "seconds" ? "SECONDS" : "BEATS";
+    this.el("event-time-units").textContent =
+      s.timeBase === "seconds" ? "SECONDS" : "BEATS";
     this.input("clip-clock").value = s.clockMode;
     this.input("clip-quantize").value = s.quantization;
     this.input("playback-mode").value = s.playbackMode;
@@ -434,7 +499,12 @@ export class MidiEditor {
         top + i * row + row / 2,
       );
     }
-    const step = stepSize(this.store.state.quantization) || 0.25,
+    const step =
+        stepSize(
+          this.store.state.timeBase === "seconds"
+            ? "OFF"
+            : this.store.state.quantization,
+        ) || 0.25,
       count = Math.min(1024, Math.ceil(c.length / step));
     for (let i = 0; i <= count; i++) {
       const beat = (i * c.length) / count,

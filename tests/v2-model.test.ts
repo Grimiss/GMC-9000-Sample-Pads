@@ -38,3 +38,49 @@ test("scene durations support seconds and bars", () => {
     17.25,
   );
 });
+
+import { ClipStore, EventEngine } from "../src/events/core.ts";
+test("new FREE clips use seconds and ignore BPM; quantization defaults OFF", () => {
+  let time = 0;
+  const store = new ClipStore();
+  assert.equal(store.state.quantization, "OFF");
+  assert.equal(store.state.timeBase, "seconds");
+  store.state.playbackMode = "MIDI";
+  store.state.bpm = 300;
+  const events: any[] = [];
+  const player = new EventEngine(store, () => time, {
+    trigger: (e) => events.push(e),
+    cancelOwner: () => {},
+  });
+  store.add(0, 0.123456);
+  player.play();
+  time = 1;
+  assert.equal(player.snapshot().beat, 1);
+  store.state.bpm = 30;
+  time = 2;
+  assert.equal(player.snapshot().beat, 2);
+  assert.equal(store.clip.events[0].beat, 0.123456);
+});
+test("SYNC internal tempo and swing schedule musical events on audio time", () => {
+  let time = 0;
+  const store = new ClipStore();
+  Object.assign(store.state, {
+    clockMode: "SYNC",
+    clockSource: "internal",
+    timeBase: "beats",
+    bpm: 120,
+    playbackMode: "MIDI",
+    swing: 0.5,
+  });
+  store.add(0, 0.5);
+  const events: any[] = [];
+  const player = new EventEngine(store, () => time, {
+    trigger: (e) => events.push(e),
+    cancelOwner: () => {},
+  });
+  player.play();
+  time = 0.26;
+  player.tick();
+  assert.equal(events.length, 1);
+  assert.ok(Math.abs(events[0].when - 0.375) < 0.00001);
+});

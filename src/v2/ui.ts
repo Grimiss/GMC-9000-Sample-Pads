@@ -1,3 +1,4 @@
+import { SongController } from "./song";
 import { pads, settings, type Pad } from "../state";
 import { engine } from "../audio/engine";
 import { audioInput, AudioInput } from "../audio/input";
@@ -24,6 +25,7 @@ export function downloadWav(buffer: AudioBuffer, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export class StudioUI {
+  song!: SongController;
   dialog: HTMLDialogElement;
   wave: HTMLCanvasElement;
   recorder = new AudioInput();
@@ -33,7 +35,10 @@ export class StudioUI {
   clipboard: Pad | null = null;
   zoom = 1;
   scroll = 0;
-  private held = new Map<number, { released: boolean; pad: number; starting:boolean }>();
+  private held = new Map<
+    number,
+    { released: boolean; pad: number; starting: boolean }
+  >();
   private suppress = new Map<number, number>();
   constructor(public app: AppUI) {
     const nav = document.createElement("div");
@@ -252,6 +257,7 @@ export class StudioUI {
       );
     this.el("resample-stop").onclick = () =>
       this.safe(() => this.finishResample());
+    this.song = new SongController(this);
     this.installWave();
     this.installHoldAndDrop();
     this.refresh();
@@ -468,6 +474,14 @@ export class StudioUI {
       this.status("Resample assigned. Sources preserved; EDIT is ready.");
     }
   }
+  async exportSong() {
+    throw new Error("Song export is wired in stage 3");
+  }
+  async cancelExport() {
+    if (this.recorder.recording) await this.recorder.stop();
+    this.exporting = false;
+    await this.song.stop();
+  }
   private installHoldAndDrop() {
     document.querySelectorAll<HTMLElement>("[data-trigger]").forEach((el) => {
       const id = Number(el.dataset.trigger);
@@ -478,8 +492,11 @@ export class StudioUI {
           e.preventDefault();
           e.stopImmediatePropagation();
           el.setPointerCapture(e.pointerId);
-          if(this.held.size||audioInput.recording||this.resampling){this.status('Finish the current capture first');return;}
-          const hold = { released: false, pad: id, starting:true };
+          if (this.held.size || audioInput.recording || this.resampling) {
+            this.status("Finish the current capture first");
+            return;
+          }
+          const hold = { released: false, pad: id, starting: true };
           this.held.set(e.pointerId, hold);
           this.suppress.set(id, performance.now() + 60000);
           this.app.select(id);
@@ -487,8 +504,16 @@ export class StudioUI {
             await this.app.ready();
             if (!audioInput.source)
               await audioInput.connect(this.input("audio-input").value);
-            if (hold.released){this.held.delete(e.pointerId);this.suppress.set(id,performance.now()+400);return;}
-            try{await audioInput.start();}finally{hold.starting=false;}
+            if (hold.released) {
+              this.held.delete(e.pointerId);
+              this.suppress.set(id, performance.now() + 400);
+              return;
+            }
+            try {
+              await audioInput.start();
+            } finally {
+              hold.starting = false;
+            }
 
             this.status(`RECORDING PAD ${id + 1} · RELEASE TO FINISH`);
             if (hold.released) await this.endHold(e.pointerId);

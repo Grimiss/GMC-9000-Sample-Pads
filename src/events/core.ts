@@ -24,6 +24,9 @@ export interface EventState {
   clockMode: ClockMode;
   playbackMode: PlaybackMode;
   quantization: Quantization;
+  timeBase?: "seconds" | "beats";
+  clockSource?: "internal" | "host";
+  swing?: number;
 }
 export interface ClockSnapshot {
   beat: number;
@@ -47,8 +50,10 @@ export interface VoicePort {
 let nextId = 0;
 export const uid = () =>
   `${Date.now().toString(36)}-${(++nextId).toString(36)}`;
-export const wrap = (beat: number, length: number) =>
-  ((beat % length) + length) % length;
+export const wrap = (beat: number, length: number) => {
+  const value = beat % length;
+  return value < 0 ? value + length : value;
+};
 export function stepSize(q: Quantization) {
   return q === "OFF" ? 0 : 4 / Number(q.slice(2));
 }
@@ -65,7 +70,10 @@ export function initialEvents(): EventState {
     bpm: 120,
     clockMode: "FREE",
     playbackMode: "SEQ",
-    quantization: "1/16",
+    quantization: "OFF",
+    timeBase: "seconds",
+    clockSource: "internal",
+    swing: 0,
   };
 }
 export class ClipStore {
@@ -118,7 +126,10 @@ export class ClipStore {
   add(lane: number, beat: number, velocity = 0.8, duration?: number) {
     const originalBeat = wrap(beat, this.clip.length),
       b = wrap(
-        quantize(originalBeat, this.state.quantization),
+        quantize(
+          originalBeat,
+          this.state.timeBase === "seconds" ? "OFF" : this.state.quantization,
+        ),
         this.clip.length,
       );
     if (
@@ -194,7 +205,10 @@ export class EventEngine {
     this.port = port;
   }
   snapshot(time = this.now()): ClockSnapshot {
-    if (this.store.state.clockMode === "SYNC")
+    if (
+      this.store.state.clockMode === "SYNC" &&
+      this.store.state.clockSource !== "internal"
+    )
       return (
         this.host?.snapshot(time) ?? {
           beat: 0,
@@ -207,9 +221,13 @@ export class EventEngine {
       beat:
         this.originBeat +
         (this.running
-          ? ((time - this.originTime) * this.store.state.bpm) / 60
+          ? ((time - this.originTime) *
+              (this.store.state.timeBase === "seconds"
+                ? 60
+                : this.store.state.bpm)) /
+            60
           : 0),
-      bpm: this.store.state.bpm,
+      bpm: this.store.state.timeBase === "seconds" ? 60 : this.store.state.bpm,
       running: this.running,
       revision: 0,
     };
@@ -221,6 +239,13 @@ export class EventEngine {
     this.cursor = null;
     this.port.cancelOwner("midi", this.now());
     this.tick(this.originBeat);
+  }
+  playAt(time: number) {
+    this.running = true;
+    this.originTime = time;
+    this.originBeat = 0;
+    this.cursor = null;
+    this.tick(0);
   }
   pause() {
     if (!this.running) return;
@@ -236,6 +261,11 @@ export class EventEngine {
     this.suppressed.clear();
     this.originBeat = 0;
     this.originTime = this.now();
+    this.invalidate();
+  }
+  seek(position: number, time = this.now()) {
+    this.originBeat = position;
+    this.originTime = time;
     this.invalidate();
   }
   connectHost(host: HostClock | null) {
@@ -266,7 +296,7 @@ export class EventEngine {
       this.invalidate();
       return;
     }
-    const key = `${this.store.state.activeClip}/${this.store.state.clockMode}/${s.revision}/${s.bpm}`;
+    const key = `${this.store.state.activeClip}/${this.store.state.clockMode}/${this.store.state.timeBase}/${this.store.state.clockSource}/${s.revision}/${s.bpm}`;
     if (this.revision !== key) {
       this.invalidate();
       this.revision = key;
@@ -287,8 +317,19 @@ export class EventEngine {
       this.invalidate();
       return;
     }
-    for (const e of clip.events) {
-      if (e.beat >= clip.length) continue;
+    for (const original of clip.events) {
+      const e = {
+        ...original,
+        beat: Math.min(
+          clip.length - 1e-7,
+          original.beat +
+            (this.store.state.timeBase !== "seconds" &&
+            Math.floor(original.beat / 0.5) % 2
+              ? (this.store.state.swing ?? 0) * 0.5
+              : 0),
+        ),
+      };
+      if (original.beat >= clip.length) continue;
       const first = Math.max(
           0,
           Math.ceil((start - e.beat - 1e-9) / clip.length),
@@ -397,5 +438,19 @@ export function validateEvents(raw: unknown, lanes: number): EventState {
     }
   }
   if (!ids.has(s.activeClip)) throw new Error("Missing active clip");
-  return structuredClone(s);
+  if (
+    (s.timeBase !== undefined && !["seconds", "beats"].includes(s.timeBase)) ||
+    (s.clockSource !== undefined &&
+      !["internal", "host"].includes(s.clockSource)) ||
+    (s.swing !== undefined &&
+      (!Number.isFinite(s.swing) || s.swing < 0 || s.swing > 0.75))
+  )
+    throw new Error("Invalid V2 timing settings");
+  return {
+    ...structuredClone(s),
+    timeBase: s.timeBase ?? "beats",
+    clockSource:
+      s.clockSource ?? (s.clockMode === "SYNC" ? "host" : "internal"),
+    swing: s.swing ?? 0,
+  };
 }

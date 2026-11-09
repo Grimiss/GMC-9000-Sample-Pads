@@ -763,7 +763,7 @@ midiEditor = new MidiEditor({
     delayAmount,
     reverbAmount,
   }),
-  applyGlobals: (g) => {
+  applyGlobals: (g, when = engine.context?.currentTime ?? 0) => {
     sr = g.sr;
     bits = g.bits;
     delayOn = g.delayOn;
@@ -782,10 +782,10 @@ midiEditor = new MidiEditor({
     }
     $("#delay-on").classList.toggle("lit", delayOn);
     $("#reverb-on").classList.toggle("lit", reverbOn);
-    engine.degrade(sr, bits);
-    engine.volume(g.master);
-    engine.effects("delay", delayOn, delayAmount);
-    engine.effects("reverb", reverbOn, reverbAmount);
+    engine.degrade(sr, bits, when);
+    engine.volume(g.master, when);
+    engine.effects("delay", delayOn, delayAmount, when);
+    engine.effects("reverb", reverbOn, reverbAmount, when);
   },
 });
 export const midiSession = midiEditor;

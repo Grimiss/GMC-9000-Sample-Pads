@@ -37,6 +37,8 @@ export class Sampler {
   feedback!: GainNode;
   random = Math.random;
   private decisions = new Map<string, boolean>();
+  cancelPlan: { when: number; fade: number } | null = null;
+  sceneFade = new Map<number, { at: number; seconds: number }>();
   private initializing: Promise<void> | null = null;
   async init() {
     if (this.initializing) await this.initializing;
@@ -169,7 +171,10 @@ export class Sampler {
   }
   resetPad(id: number) {
     this.cancelPadOwner(id, "seq");
-    this.origins.set(id, this.context.currentTime + 0.01);
+    this.beginCycle(id, this.context.currentTime + 0.01);
+  }
+  beginCycle(id: number, when: number) {
+    this.origins.set(id, when);
     this.next.set(id, 0);
     for (const key of this.decisions.keys())
       if (key.startsWith(`${id}/`)) this.decisions.delete(key);
@@ -244,6 +249,20 @@ export class Sampler {
       start + offset * actualRate,
       Math.max(0.001, duration - offset * actualRate),
     );
+    const sf = owner === "seq" ? this.sceneFade.get(id) : undefined;
+    if (sf && sf.seconds > 0 && when < sf.at + sf.seconds) {
+      const peak = p.level * velocity;
+      gain.gain.cancelScheduledValues(when);
+      gain.gain.setValueAtTime(
+        peak * Math.max(0, (when - sf.at) / sf.seconds),
+        when,
+      );
+      gain.gain.linearRampToValueAtTime(
+        peak * Math.min(1, (when + total - sf.at) / sf.seconds),
+        when + Math.max(0.001, total - edge),
+      );
+      gain.gain.linearRampToValueAtTime(0, when + total);
+    }
     const v = {
       source,
       gain,
@@ -281,6 +300,13 @@ export class Sampler {
     );
   }
   cancelOwner(owner: string, after = -Infinity) {
+    if (this.cancelPlan) {
+      const { when, fade } = this.cancelPlan;
+      this.stopOwnerAt(owner, when, fade);
+      this.voices = this.voices.filter((v) => v.owner !== owner);
+      return;
+    }
+
     for (const v of this.voices.filter(
       (v) => v.owner === owner && v.start >= after,
     )) {
@@ -394,12 +420,16 @@ export class Sampler {
       } catch {}
     }
   }
-  degrade(rate: number, bits: number) {
-    this.crusher?.port.postMessage({ rate, bits });
+  degrade(rate: number, bits: number, when = this.context?.currentTime ?? 0) {
+    this.crusher?.port.postMessage({ rate, bits, when });
   }
-  volume(v: number) {
+  volume(v: number, when = this.context?.currentTime ?? 0) {
     if (this.master)
-      this.master.gain.setTargetAtTime(v, this.context.currentTime, 0.01);
+      this.master.gain.setTargetAtTime(
+        v,
+        Math.max(this.context.currentTime, when),
+        0.01,
+      );
   }
   level(id: number, v: number) {
     pads[id].level = v;
@@ -410,12 +440,17 @@ export class Sampler {
         0.01,
       );
   }
-  effects(kind: "delay" | "reverb", on: boolean, amount: number) {
+  effects(
+    kind: "delay" | "reverb",
+    on: boolean,
+    amount: number,
+    when = this.context?.currentTime ?? 0,
+  ) {
     const node = kind === "delay" ? this.delayWet : this.reverbWet;
     if (node)
       node.gain.setTargetAtTime(
         on ? amount : 0,
-        this.context.currentTime,
+        Math.max(this.context.currentTime, when),
         0.02,
       );
   }

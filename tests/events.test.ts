@@ -11,6 +11,9 @@ function setup() {
   const notes: any[] = [],
     cancelled: string[] = [];
   const store = new ClipStore();
+  store.state.timeBase = "beats";
+  store.state.quantization = "1/16";
+  store.state.clockSource = "host";
   store.state.playbackMode = "BOTH";
   const engine = new EventEngine(store, () => time, {
     trigger: (e) => notes.push(e),
